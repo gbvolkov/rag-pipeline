@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HTML Tables Test Fixture (10–15 Rows Each)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; line-height: 1.45; margin: 24px; max-width: 1100px; }
+    header, section, footer { margin: 18px 0; }
+    .meta { font-size: 0.95rem; opacity: 0.85; }
+    .note { padding: 10px 12px; border-left: 4px solid rgba(127,127,127,.6); background: rgba(127,127,127,.08); margin: 10px 0 16px; }
+    table { border-collapse: collapse; width: 100%; margin: 14px 0 28px; table-layout: fixed; }
+    caption { text-align: left; font-weight: 700; margin-bottom: 8px; }
+    th, td { border: 1px solid rgba(127,127,127,.45); padding: 8px 10px; vertical-align: top; word-wrap: break-word; }
+    thead th { background: rgba(127,127,127,.15); }
+    tbody tr:nth-child(even) { background: rgba(127,127,127,.08); }
+    hr { border: none; border-top: 1px solid rgba(127,127,127,.45); margin: 22px 0; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    pre { padding: 12px; border: 1px solid rgba(127,127,127,.35); overflow: auto; }
+  </style>
+</head>
+
+<body>
+<header>
+  <h1>Test Fixture: Multiple Tables + Mixed HTML</h1>
+  <p class="meta">
+    All tables have <strong>10–15 rows</strong> and <strong>3–7 columns</strong>, with sections before/between/after.
+  </p>
+
+  <div class="note">
+    Includes: <strong>bold</strong>, <em>italic</em>, <u>underline</u>, <mark>mark</mark>, <small>small</small>,
+    <abbr title="HyperText Markup Language">HTML</abbr>, <time datetime="2026-02-19">Feb 19, 2026</time>,
+    and inline <code>&lt;code&gt;</code>.
+  </div>
+
+  <nav aria-label="Table navigation">
+    <ol>
+      <li><a href="#t1">Table 1: 10 rows / 3 cols</a></li>
+      <li><a href="#t2">Table 2: 12 rows / 4 cols</a></li>
+      <li><a href="#t3">Table 3: 15 rows / 5 cols</a></li>
+      <li><a href="#t4">Table 4: 11 rows / 6 cols</a></li>
+      <li><a href="#t5">Table 5: 14 rows / 7 cols</a></li>
+    </ol>
+  </nav>
+</header>
+
+<hr />
+
+<section>
+  <h2>Intro Section (Before tables)</h2>
+  <p>
+    This paragraph contains <strong>bold</strong>, <em>italic</em>, <q>inline quote</q>, and a
+    <span title="tooltip text">span with a title attribute</span>.
+    Also: <del>deleted</del> and <ins>inserted</ins> text.
+  </p>
+
+  <h3>Numbered list</h3>
+  <ol>
+    <li>Verify headings and list rendering.</li>
+    <li>Verify table captions and headers.</li>
+    <li>Verify mixed inline tags like <kbd>Ctrl</kbd>+<kbd>F</kbd>.</li>
+  </ol>
+
+  <h3>Definition list</h3>
+  <dl>
+    <dt>Fixture</dt>
+    <dd>Stable test content used repeatedly.</dd>
+    <dt>Parser</dt>
+    <dd>Component that converts text into structured data.</dd>
+  </dl>
+</section>
+
+<section id="t1">
+  <h2>Table 1: 10 rows, 3 columns</h2>
+  <table>
+    <caption>Inventory Snapshot (10 × 3)</caption>
+    <thead>
+      <tr>
+        <th scope="col">Item</th>
+        <th scope="col">Category</th>
+        <th scope="col">Qty</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Widget-001</td><td>Hardware</td><td>12</td></tr>
+      <tr><td>Widget-002</td><td>Hardware</td><td>7</td></tr>
+      <tr><td>Gadget-010</td><td>Electronics</td><td>24</td></tr>
+      <tr><td>Gadget-011</td><td>Electronics</td><td>3</td></tr>
+      <tr><td>Part-A</td><td>Spare</td><td>52</td></tr>
+      <tr><td>Part-B</td><td>Spare</td><td>18</td></tr>
+      <tr><td>Accessory-X</td><td>Accessories</td><td>5</td></tr>
+      <tr><td>Accessory-Y</td><td>Accessories</td><td>9</td></tr>
+      <tr><td>Tool-Red</td><td>Tools</td><td>2</td></tr>
+      <tr><td>Tool-Blue</td><td>Tools</td><td>1</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<hr />
+
+<section>
+  <h2>Between tables (Interlude)</h2>
+  <p>
+    A small code block plus a <a href="https://example.com" rel="noopener">link</a>.
+  </p>
+  <pre><code>&lt;table&gt;
+  &lt;tr&gt;&lt;th&gt;A&lt;/th&gt;&lt;th&gt;B&lt;/th&gt;&lt;/tr&gt;
+  &lt;tr&gt;&lt;td&gt;1&lt;/td&gt;&lt;td&gt;2&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;</code></pre>
+</section>
+
+<section id="t2">
+  <h2>Table 2: 12 rows, 4 columns</h2>
+  <table>
+    <caption>Orders Log (12 × 4)</caption>
+    <thead>
+      <tr>
+        <th scope="col">Order ID</th>
+        <th scope="col">Customer</th>
+        <th scope="col">Status</th>
+        <th scope="col">Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>ORD-0001</td><td>Acme GmbH</td><td>New</td><td>Priority: <strong>High</strong></td></tr>
+      <tr><td>ORD-0002</td><td>Bluebird AG</td><td>New</td><td>—</td></tr>
+      <tr><td>ORD-0003</td><td>Contoso</td><td>Processing</td><td><em>Verify address</em></td></tr>
+      <tr><td>ORD-0004</td><td>Delta SpA</td><td>Processing</td><td>Gift wrap requested</td></tr>
+      <tr><td>ORD-0005</td><td>Evergreen Ltd.</td><td>On hold</td><td>Waiting for PO approval</td></tr>
+      <tr><td>ORD-0006</td><td>Fjord AS</td><td>Shipped</td><td>Carrier: DHL</td></tr>
+      <tr><td>ORD-0007</td><td>Gamma SAS</td><td>Shipped</td><td>Tracking sent</td></tr>
+      <tr><td>ORD-0008</td><td>Helios BV</td><td>Delivered</td><td>Signed by “M.K.”</td></tr>
+      <tr><td>ORD-0009</td><td>Indigo Oy</td><td>Delivered</td><td>Left at reception</td></tr>
+      <tr><td>ORD-0010</td><td>Juniper AB</td><td>Returned</td><td>Damaged packaging</td></tr>
+      <tr><td>ORD-0011</td><td>Kite Co.</td><td>New</td><td>Call before delivery</td></tr>
+      <tr><td>ORD-0012</td><td>Lumen Inc.</td><td>Processing</td><td>Split shipment possible</td></tr>
+    </tbody>
+  </table>
+
+  <blockquote cite="https://example.com">
+    <p>“Blockquotes between tables help test layout edge cases.”</p>
+    <footer>— <cite>Fixture Notes</cite></footer>
+  </blockquote>
+</section>
+
+<hr />
+
+<section id="t3">
+  <h2>Table 3: 15 rows, 5 columns</h2>
+  <table>
+    <caption>Telemetry (15 × 5)</caption>
+    <thead>
+      <tr>
+        <th scope="col">Row</th>
+        <th scope="col">Device</th>
+        <th scope="col">Temp (°C)</th>
+        <th scope="col">Voltage (V)</th>
+        <th scope="col">State</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>DEV-001</td><td>21.0</td><td>3.30</td><td>OK</td></tr>
+      <tr><td>2</td><td>DEV-002</td><td>21.2</td><td>3.29</td><td>OK</td></tr>
+      <tr><td>3</td><td>DEV-003</td><td>21.4</td><td>3.31</td><td>OK</td></tr>
+      <tr><td>4</td><td>DEV-004</td><td>21.6</td><td>3.30</td><td>OK</td></tr>
+      <tr><td>5</td><td>DEV-005</td><td>21.8</td><td>3.28</td><td>OK</td></tr>
+      <tr><td>6</td><td>DEV-006</td><td>22.0</td><td>3.27</td><td>OK</td></tr>
+      <tr><td>7</td><td>DEV-007</td><td>22.2</td><td>3.30</td><td>OK</td></tr>
+      <tr><td>8</td><td>DEV-008</td><td>22.4</td><td>3.32</td><td>OK</td></tr>
+      <tr><td>9</td><td>DEV-009</td><td>22.6</td><td>3.29</td><td>OK</td></tr>
+      <tr><td>10</td><td>DEV-010</td><td>22.8</td><td>3.26</td><td>OK</td></tr>
+      <tr><td>11</td><td>DEV-011</td><td>23.0</td><td>3.30</td><td>WARN</td></tr>
+      <tr><td>12</td><td>DEV-012</td><td>23.2</td><td>3.25</td><td>WARN</td></tr>
+      <tr><td>13</td><td>DEV-013</td><td>23.4</td><td>3.20</td><td>WARN</td></tr>
+      <tr><td>14</td><td>DEV-014</td><td>23.6</td><td>3.15</td><td>ALERT</td></tr>
+      <tr><td>15</td><td>DEV-015</td><td>23.8</td><td>3.10</td><td>ALERT</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<hr />
+
+<section id="t4">
+  <h2>Table 4: 11 rows, 6 columns</h2>
+  <table>
+    <caption>Users (11 × 6)</caption>
+    <thead>
+      <tr>
+        <th scope="col">#</th>
+        <th scope="col">Username</th>
+        <th scope="col">Role</th>
+        <th scope="col">Active</th>
+        <th scope="col">Signup</th>
+        <th scope="col">Comment</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>user001</td><td>Admin</td><td>true</td><td>2025-01-01</td><td>Seed account</td></tr>
+      <tr><td>2</td><td>user002</td><td>Editor</td><td>true</td><td>2025-01-02</td><td>—</td></tr>
+      <tr><td>3</td><td>user003</td><td>Viewer</td><td>false</td><td>2025-01-03</td><td>Inactive (test)</td></tr>
+      <tr><td>4</td><td>user004</td><td>Editor</td><td>true</td><td>2025-01-04</td><td>Prefers <em>dark mode</em></td></tr>
+      <tr><td>5</td><td>user005</td><td>Viewer</td><td>true</td><td>2025-01-05</td><td>—</td></tr>
+      <tr><td>6</td><td>user006</td><td>Editor</td><td>true</td><td>2025-01-06</td><td>EU region</td></tr>
+      <tr><td>7</td><td>user007</td><td>Viewer</td><td>false</td><td>2025-01-07</td><td>Bounced email</td></tr>
+      <tr><td>8</td><td>user008</td><td>Admin</td><td>true</td><td>2025-01-08</td><td>Has 2FA enabled</td></tr>
+      <tr><td>9</td><td>user009</td><td>Viewer</td><td>true</td><td>2025-01-09</td><td>—</td></tr>
+      <tr><td>10</td><td>user010</td><td>Editor</td><td>true</td><td>2025-01-10</td><td>Uses API</td></tr>
+      <tr><td>11</td><td>user011</td><td>Viewer</td><td>true</td><td>2025-01-11</td><td>Note: <small>small text</small></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<hr />
+
+<section id="t5">
+  <h2>Table 5: 14 rows, 7 columns</h2>
+  <table>
+    <caption>Projects (14 × 7)</caption>
+    <thead>
+      <tr>
+        <th scope="col">ID</th>
+        <th scope="col">Project</th>
+        <th scope="col">Owner</th>
+        <th scope="col">Stage</th>
+        <th scope="col">Start</th>
+        <th scope="col">End</th>
+        <th scope="col">Tags</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>P-001</td><td>Atlas</td><td>A. Novak</td><td>Plan</td><td>2025-02-01</td><td>2025-03-15</td><td><span>infra</span>, <span>core</span></td></tr>
+      <tr><td>P-002</td><td>Borealis</td><td>B. Chen</td><td>Build</td><td>2025-02-05</td><td>2025-04-01</td><td><span>ui</span>, <span>api</span></td></tr>
+      <tr><td>P-003</td><td>Cobalt</td><td>C. Rossi</td><td>Test</td><td>2025-02-10</td><td>2025-04-10</td><td><span>qa</span></td></tr>
+      <tr><td>P-004</td><td>Drift</td><td>D. Singh</td><td>Release</td><td>2025-02-12</td><td>2025-04-20</td><td><span>release</span>, <span>ops</span></td></tr>
+      <tr><td>P-005</td><td>Echo</td><td>E. Müller</td><td>Plan</td><td>2025-02-15</td><td>2025-03-30</td><td><span>research</span></td></tr>
+      <tr><td>P-006</td><td>Flux</td><td>F. Garcia</td><td>Build</td><td>2025-02-18</td><td>2025-04-05</td><td><span>backend</span></td></tr>
+      <tr><td>P-007</td><td>Grove</td><td>G. Ito</td><td>Test</td><td>2025-02-20</td><td>2025-04-12</td><td><span>perf</span>, <span>load</span></td></tr>
+      <tr><td>P-008</td><td>Horizon</td><td>H. Kim</td><td>Release</td><td>2025-02-22</td><td>2025-04-25</td><td><span>docs</span>, <span>training</span></td></tr>
+      <tr><td>P-009</td><td>Ion</td><td>I. Dubois</td><td>Plan</td><td>2025-02-24</td><td>2025-03-20</td><td><span>design</span></td></tr>
+      <tr><td>P-010</td><td>Jade</td><td>J. Silva</td><td>Build</td><td>2025-02-26</td><td>2025-04-08</td><td><span>mobile</span>, <span>ui</span></td></tr>
+      <tr><td>P-011</td><td>Kestrel</td><td>K. Hansen</td><td>Test</td><td>2025-02-28</td><td>2025-04-14</td><td><span>qa</span>, <span>automation</span></td></tr>
+      <tr><td>P-012</td><td>Lumen</td><td>L. Novak</td><td>Release</td><td>2025-03-01</td><td>2025-04-30</td><td><span>ops</span></td></tr>
+      <tr><td>P-013</td><td>Mirage</td><td>M. Ali</td><td>Plan</td><td>2025-03-03</td><td>2025-03-28</td><td><span>prototype</span>, <span>ux</span></td></tr>
+      <tr><td>P-014</td><td>Nimbus</td><td>N. Ochoa</td><td>Build</td><td>2025-03-05</td><td>2025-04-18</td><td><span>cloud</span>, <span>infra</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer>
+  <hr />
+  <h2>Final Section (After tables)</h2>
+  <p>
+    End content with mixed tags: <strong>strong</strong>, <em>em</em>, <cite>cite</cite>, and a
+    <a href="#t1">back-to-top table link</a>.
+  </p>
+</footer>
+</body>
+</html>

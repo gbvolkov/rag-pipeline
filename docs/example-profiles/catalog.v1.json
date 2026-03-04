@@ -1,0 +1,286 @@
+{
+  "version": "v1",
+  "generated_at": "2026-03-04T14:40:28.644255+00:00",
+  "profiles": [
+    {
+      "profile_id": "profile::01_text_basic",
+      "family": "text",
+      "examples": [
+        "01_text_basic.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::01_text_workflow_e2e",
+      "family": "text",
+      "examples": [
+        "01_text_workflow_e2e.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::02_markdown_enrichment",
+      "family": "text",
+      "examples": [
+        "02_markdown_enrichment.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::02_markdown_enrichment_vector",
+      "family": "text",
+      "examples": [
+        "02_markdown_enrichment_vector.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::02_raptor_workflow_e2e",
+      "family": "raptor",
+      "examples": [
+        "02_raptor_workflow_e2e.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::03_pdf_semantic",
+      "family": "pdf",
+      "examples": [
+        "03_pdf_semantic.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::03_structure_graph_workflow_e2e",
+      "family": "graph",
+      "examples": [
+        "03_structure_graph_workflow_e2e.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::04_pdf_raptor",
+      "family": "raptor",
+      "examples": [
+        "04_pdf_raptor.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::04_tabular_hybrid_workflow_e2e",
+      "family": "text",
+      "examples": [
+        "04_tabular_hybrid_workflow_e2e.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::05_advanced_chunking_e2e",
+      "family": "text",
+      "examples": [
+        "05_advanced_chunking_e2e.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::05_docx_graph",
+      "family": "graph",
+      "examples": [
+        "05_docx_graph.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::06_docx_regex",
+      "family": "docx",
+      "examples": [
+        "06_docx_regex.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::07_csv_table_summary",
+      "family": "tabular",
+      "examples": [
+        "07_csv_table_summary.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::07_md_table_summary",
+      "family": "text",
+      "examples": [
+        "07_md_table_summary.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::08_excel_csv_basic",
+      "family": "tabular",
+      "examples": [
+        "08_excel_csv_basic.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::08_excel_md_basic",
+      "family": "tabular",
+      "examples": [
+        "08_excel_md_basic.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::09_json_hybrid",
+      "family": "json",
+      "examples": [
+        "09_json_hybrid.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::10_text_ensemble",
+      "family": "ensemble",
+      "examples": [
+        "10_text_ensemble.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::11_log_regex_loader",
+      "family": "regex",
+      "examples": [
+        "11_log_regex_loader.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::12_qa_loader",
+      "family": "qa",
+      "examples": [
+        "12_qa_loader.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::13_dual_storage",
+      "family": "dual_storage",
+      "examples": [
+        "13_dual_storage.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::14_mineru_pdf",
+      "family": "mineru",
+      "examples": [
+        "14_mineru_pdf.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::15_pptx_unsupported",
+      "family": "text",
+      "examples": [
+        "15_pptx_unsupported.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::16_html_html",
+      "family": "html",
+      "examples": [
+        "16_html_html.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::16_html_md",
+      "family": "html",
+      "examples": [
+        "16_html_md.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::17_web_loader",
+      "family": "web",
+      "examples": [
+        "17_web_loader.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::17A_web_loader_plantpad",
+      "family": "web",
+      "examples": [
+        "17A_web_loader_plantpad.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::17B_web_loader_quotes",
+      "family": "web",
+      "examples": [
+        "17B_web_loader_quotes.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::17C_web_loader_example",
+      "family": "web",
+      "examples": [
+        "17C_web_loader_example.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::create_dummy_excel",
+      "family": "tabular",
+      "examples": [
+        "create_dummy_excel.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::debug_13",
+      "family": "text",
+      "examples": [
+        "debug_13.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::debug_segment",
+      "family": "text",
+      "examples": [
+        "debug_segment.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::example_utils",
+      "family": "text",
+      "examples": [
+        "example_utils.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::graph_rag_demo",
+      "family": "graph",
+      "examples": [
+        "graph_rag_demo.py"
+      ],
+      "equivalence_mode": "functional"
+    },
+    {
+      "profile_id": "profile::raptor_demo",
+      "family": "raptor",
+      "examples": [
+        "raptor_demo.py"
+      ],
+      "equivalence_mode": "functional"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+Q: What is your primary programming language?
+A: I primarily use Python for data science and backend development.
+
+Q: How many years of experience do you have?
+A: I have over 5 years of professional experience.
+
+Q: Do you have experience with graph databases?
+A: Yes, I have worked with Neo4j and NetworkX for knowledge graph projects.

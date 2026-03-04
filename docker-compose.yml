@@ -1,0 +1,124 @@
+x-app-env: &app-env
+  DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/rag_api
+  REDIS_URL: redis://redis:6379/0
+  CELERY_ALWAYS_EAGER: "false"
+  LOCAL_BLOB_ROOT: /data/blobstore
+  BLOB_BACKEND: filesystem
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: minioadmin
+  MINIO_SECRET_KEY: minioadmin
+  MINIO_SECURE: "false"
+  MINIO_BUCKET: rag-artifacts
+  RAG_LIB_SOURCE_DIR: /opt/rag-lib/src/rag_lib
+  RAG_LIB_EXAMPLES_DIR: /opt/rag-lib/examples
+
+services:
+  rag-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8007"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "8007:8007"
+    volumes:
+      - rag_blob_data:/data/blobstore
+      - ../rag-lib:/opt/rag-lib:ro
+    restart: unless-stopped
+
+  rag-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    command: [
+      "uv",
+      "run",
+      "celery",
+      "-A",
+      "app.core.celery_app.celery_app",
+      "worker",
+      "--loglevel=INFO",
+      "--queues",
+      "rag-jobs,rag-mineru",
+      "--concurrency",
+      "2"
+    ]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    volumes:
+      - rag_blob_data:/data/blobstore
+      - ../rag-lib:/opt/rag-lib:ro
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: rag_api
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rag_api"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 2; done
+        mc mb -p local/rag-artifacts || true
+        exit 0
+    restart: "no"
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  rag_blob_data:

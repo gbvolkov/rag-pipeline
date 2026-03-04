@@ -1,0 +1,22 @@
+[project]
+name = "rag-pipeline"
+version = "0.1.0"
+description = "FastAPI orchestration layer for rag-lib pipelines"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "boto3>=1.38.0",
+  "celery[redis]>=5.5.0",
+  "fastapi>=0.116.0",
+  "pydantic-settings>=2.11.0",
+  "python-multipart>=0.0.20",
+  "rag-lib @ git+https://github.com/gbvolkov/rag-lib.git",
+  "sqlalchemy>=2.0.43",
+  "uvicorn[standard]>=0.35.0",
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.28.1",
+  "pytest>=8.4.2",
+]

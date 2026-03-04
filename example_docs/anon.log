@@ -1,0 +1,190 @@
+2025-12-09 11:10:47,240 — WARNING — NON_CASHABLE: Ralph Perez
+2025-12-09 11:10:47,263 — WARNING — NON_CASHABLE: Elizabeth Spence
+2025-12-09 11:10:47,293 — WARNING — NON_CASHABLE: Christina Perez
+2025-12-09 11:10:47,300 — DEBUG — 
++======================================ANONIMIZATION=====================================+
+2025-12-09 11:10:47,301 — DEBUG — 
+>=====================ANONIMIZATION INPUT:
+Client Preston Arnold (795280835), on behalf of Diana Jacobs (795280835), contacted “Fancy Enterprise Corp” with a proposal to buy a tractor.
+Payment will be made using his card 180094698295438.
+Call him at 001-747-617-3053x040 or +1-940-888-8570x596.
+Or visit him at London, City, 23664 Cindy Glen.
+You can view his data at http://www.evans.com/
+or go to 72.45.250.197 
+
+2025-12-09 11:10:47,301 — DEBUG — 
+>=====================ANONIMIZATION OUTPUT:
+Client Christina Perez (Ralph Perez), on behalf of Elizabeth Spence (Ralph Perez), contacted “Fancy Enterprise Corp” with a proposal to buy a tractor.
+Payment will be made using his card 30295190348698.
+Call him at +1-808-985-1299x15500 or 819-316-4289.
+Or visit him at London, City, 23664 8502 Ruiz Course.
+You can view his data at http://martin.com/
+or go to 144.134.69.219 
+
+
+2025-12-09 11:10:47,302 — DEBUG — 
+>============================ANONIMIZATION ANALYSIS================================
+2025-12-09 11:10:47,302 — DEBUG — CREDIT_CARD: `180094698295438` (score=1.00)) , Recognizer:CreditCardRecognizer
+2025-12-09 11:10:47,302 — DEBUG — PERSON: `Diana Jacobs` (score=0.91)) , Recognizer:GlinerRecognizer
+2025-12-09 11:10:47,302 — DEBUG — RU_ADDRESS: `Cindy Glen` (score=0.89)) , Recognizer:GlinerRecognizer
+2025-12-09 11:10:47,302 — DEBUG — PERSON: `Preston Arnold` (score=0.88)) , Recognizer:GlinerRecognizer
+2025-12-09 11:10:47,302 — DEBUG — PHONE_NUMBER: `001-747-617-3053x040` (score=0.75)) , Recognizer:PhoneRecognizer
+2025-12-09 11:10:47,302 — DEBUG — PERSON: `795280835` (score=0.61)) , Recognizer:GlinerRecognizer
+2025-12-09 11:10:47,302 — DEBUG — URL: `http://www.evans.com/` (score=0.60)) , Recognizer:UrlRecognizer
+2025-12-09 11:10:47,303 — DEBUG — IP_ADDRESS: `72.45.250.197` (score=0.60)) , Recognizer:IpRecognizer
+2025-12-09 11:10:47,303 — DEBUG — PERSON: `795280835` (score=0.60)) , Recognizer:GlinerRecognizer
+2025-12-09 11:10:47,303 — DEBUG — PHONE_NUMBER: `+1-940-888-8570x596` (score=0.40)) , Recognizer:PhoneRecognizer
+2025-12-09 11:10:47,303 — DEBUG — PHONE_NUMBER: `72.45.250.197` (score=0.40)) , Recognizer:PhoneRecognizer
+2025-12-09 11:10:47,303 — DEBUG — PHONE_NUMBER: `795280835` (score=0.20)) , Recognizer:RUPhoneRecognizer
+2025-12-09 11:10:47,303 — DEBUG — PHONE_NUMBER: `795280835` (score=0.20)) , Recognizer:RUPhoneRecognizer
+2025-12-09 11:10:47,303 — DEBUG — PHONE_NUMBER: `180094698295438` (score=0.20)) , Recognizer:RUPhoneRecognizer
+2025-12-09 11:10:47,304 — DEBUG — US_PASSPORT: `795280835` (score=0.05)) , Recognizer:UsPassportRecognizer
+2025-12-09 11:10:47,304 — DEBUG — US_BANK_NUMBER: `795280835` (score=0.05)) , Recognizer:UsBankRecognizer
+2025-12-09 11:10:47,304 — DEBUG — US_SSN: `795280835` (score=0.05)) , Recognizer:UsSsnRecognizer
+2025-12-09 11:10:47,304 — DEBUG — US_PASSPORT: `795280835` (score=0.05)) , Recognizer:UsPassportRecognizer
+2025-12-09 11:10:47,304 — DEBUG — US_BANK_NUMBER: `795280835` (score=0.05)) , Recognizer:UsBankRecognizer
+2025-12-09 11:10:47,305 — DEBUG — US_SSN: `795280835` (score=0.05)) , Recognizer:UsSsnRecognizer
+2025-12-09 11:10:47,305 — DEBUG — US_BANK_NUMBER: `180094698295438` (score=0.05)) , Recognizer:UsBankRecognizer
+2025-12-09 11:10:47,305 — DEBUG — US_DRIVER_LICENSE: `795280835` (score=0.01)) , Recognizer:UsLicenseRecognizer
+2025-12-09 11:10:47,305 — DEBUG — US_DRIVER_LICENSE: `795280835` (score=0.01)) , Recognizer:UsLicenseRecognizer
+2025-12-09 11:10:47,305 — DEBUG — 
+>============================ANONIMIZATION ENTRIES================================
+2025-12-09 11:10:47,306 — DEBUG — 	type: IP_ADDRESS;  value: 144.134.69.219;  operator: custom
+2025-12-09 11:10:47,306 — DEBUG — 	type: URL;  value: http://martin.com/;  operator: custom
+2025-12-09 11:10:47,306 — DEBUG — 	type: RU_ADDRESS;  value: 8502 Ruiz Course;  operator: custom
+2025-12-09 11:10:47,306 — DEBUG — 	type: PHONE_NUMBER;  value: 819-316-4289;  operator: custom
+2025-12-09 11:10:47,306 — DEBUG — 	type: PHONE_NUMBER;  value: +1-808-985-1299x15500;  operator: custom
+2025-12-09 11:10:47,307 — DEBUG — 	type: CREDIT_CARD;  value: 30295190348698;  operator: custom
+2025-12-09 11:10:47,307 — DEBUG — 	type: PERSON;  value: Ralph Perez;  operator: custom
+2025-12-09 11:10:47,307 — DEBUG — 	type: PERSON;  value: Elizabeth Spence;  operator: custom
+2025-12-09 11:10:47,307 — DEBUG — 	type: PERSON;  value: Ralph Perez;  operator: custom
+2025-12-09 11:10:47,307 — DEBUG — 	type: PERSON;  value: Christina Perez;  operator: custom
+2025-12-09 11:10:47,308 — DEBUG — 
+>============================ANONIMIZATION CONTEXT================================
+2025-12-09 11:10:47,308 — DEBUG — 
+/============================ANONIMIZATION FAKED_VALUES:
+2025-12-09 11:10:47,308 — DEBUG — 	hash: 144 134 69 219;  true: 72.45.250.197;  fake: 144.134.69.219
+2025-12-09 11:10:47,308 — DEBUG — 	hash: http martin com;  true: http://www.evans.com/;  fake: http://martin.com/
+2025-12-09 11:10:47,308 — DEBUG — 	hash: 8502ruizcourse;  true: Cindy Glen;  fake: 8502 Ruiz Course
+2025-12-09 11:10:47,309 — DEBUG — 	hash: 898193164289;  true: +1-940-888-8570x596;  fake: 819-316-4289
+2025-12-09 11:10:47,309 — DEBUG — 	hash: 001809915500;  true: 001-747-617-3053x040;  fake: +1-808-985-1299x15500
+2025-12-09 11:10:47,309 — DEBUG — 	hash: 30295190348698;  true: 180094698295438;  fake: 30295190348698
+2025-12-09 11:10:47,309 — DEBUG — 	hash: ralphperez;  true: 795280835;  fake: Ralph Perez
+2025-12-09 11:10:47,309 — DEBUG — 	hash: elizabethspence;  true: Diana Jacobs;  fake: Elizabeth Spence
+2025-12-09 11:10:47,309 — DEBUG — 	hash: christinaperez;  true: Preston Arnold;  fake: Christina Perez
+2025-12-09 11:10:47,310 — DEBUG — 
+/============================ANONIMIZATION TRUE_VALUES:
+2025-12-09 11:10:47,310 — DEBUG — 	hash: 72 45 250 197;  true: 72.45.250.197;  fake: 144.134.69.219
+2025-12-09 11:10:47,310 — DEBUG — 	hash: http www evans com;  true: http://www.evans.com/;  fake: http://martin.com/
+2025-12-09 11:10:47,310 — DEBUG — 	hash: cindyglen;  true: Cindy Glen;  fake: 8502 Ruiz Course
+2025-12-09 11:10:47,310 — DEBUG — 	hash: 961948570596;  true: +1-940-888-8570x596;  fake: 819-316-4289
+2025-12-09 11:10:47,310 — DEBUG — 	hash: 400013053040;  true: 001-747-617-3053x040;  fake: +1-808-985-1299x15500
+2025-12-09 11:10:47,311 — DEBUG — 	hash: 180094698295438;  true: 180094698295438;  fake: 30295190348698
+2025-12-09 11:10:47,311 — DEBUG — 	hash: 795280835;  true: 795280835;  fake: Ralph Perez
+2025-12-09 11:10:47,311 — DEBUG — 	hash: dianajacobs;  true: Diana Jacobs;  fake: Elizabeth Spence
+2025-12-09 11:10:47,311 — DEBUG — 	hash: prestonarnold;  true: Preston Arnold;  fake: Christina Perez
+2025-12-09 11:10:56,108 — DEBUG — FAKE FOUND: request: 144.134.69.219; hash: 144 134 69 219; true: 72.45.250.197; fake: 144.134.69.219
+2025-12-09 11:10:56,117 — DEBUG — Fuzzy search result: request: http://martin.com/; found: http://martin.com/; score: 100.0; true_value: http://www.evans.com/
+2025-12-09 11:10:56,118 — DEBUG — Fuzzy search result: request: http://martin.com/]; found: http://martin.com/; score: 100.0; true_value: http://www.evans.com/
+2025-12-09 11:10:56,128 — DEBUG — FAKE NOT FOUND: request: London, City, 23664 8502 Ruiz; hash: london city 236648502ruiz
+2025-12-09 11:10:56,130 — DEBUG — Fuzzy search result: request: Ralph Perez; found: Ralph Perez; score: 100.0; true_value: 795280835
+2025-12-09 11:10:56,131 — DEBUG — Fuzzy search result: request: Elizabeth Spence; found: Elizabeth Spence; score: 100.0; true_value: Diana Jacobs
+2025-12-09 11:10:56,132 — DEBUG — Fuzzy search result: request: Christina Perez; found: Christina Perez; score: 100.0; true_value: Preston Arnold
+2025-12-09 11:10:56,132 — DEBUG — 
++======================================DEANONIMIZATION=====================================+
+2025-12-09 11:10:56,132 — DEBUG — 
+>=====================DEANONIMIZATION INPUT:
+CRM Entry Note:
+
+Client: Christina Perez (on behalf of Elizabeth Spence)  
+Associated Contact: Ralph Perez  
+
+Inquiry: Proposal to purchase a tractor from Fancy Enterprise Corp
+
+Payment Details:  
+- Card Number: 3029 5190 3486 98
+
+Contact Information:  
+- Phone 1: +1-808-985-1299 x15500  
+- Phone 2: 819-316-4289  
+
+Address:  
+London, City, 23664 8502 Ruiz Course
+
+Additional Data Access:  
+- Website: [http://martin.com/](http://martin.com/)  
+- IP Address for data review: 144.134.69.219
+2025-12-09 11:10:56,133 — DEBUG — 
+>=====================DEANONIMIZATION OUTPUT:
+CRM Entry Note:
+
+Client: Preston Arnold (on behalf of Diana Jacobs)  
+Associated Contact: 795280835  
+
+Inquiry: Proposal to purchase a tractor from Fancy Enterprise Corp
+
+Payment Details:  
+- Card Number: 3029 5190 3486 98
+
+Contact Information:  
+- Phone 1: 001-747-617-3053x040  
+- Phone 2: +1-940-888-8570x596  
+
+Address:  
+London, City, 23664 8502 Ruiz Course
+
+Additional Data Access:  
+- Website: [http://www.evans.com/(http://www.evans.com/)  
+- IP Address for data review: 72.45.250.197
+
+2025-12-09 11:10:56,133 — DEBUG — 
+>============================DEANONIMIZATION ANALYSIS================================
+2025-12-09 11:10:56,133 — DEBUG — URL: `http://martin.com/]` (score=0.95)) , Recognizer:UrlRecognizer
+2025-12-09 11:10:56,134 — DEBUG — URL: `http://martin.com/` (score=0.95)) , Recognizer:UrlRecognizer
+2025-12-09 11:10:56,134 — DEBUG — IP_ADDRESS: `144.134.69.219` (score=0.95)) , Recognizer:IpRecognizer
+2025-12-09 11:10:56,134 — DEBUG — PERSON: `Christina Perez` (score=0.94)) , Recognizer:GlinerRecognizer
+2025-12-09 11:10:56,134 — DEBUG — PERSON: `Ralph Perez` (score=0.92)) , Recognizer:GlinerRecognizer
+2025-12-09 11:10:56,135 — DEBUG — RU_ADDRESS: `London, City, 23664 8502 Ruiz` (score=0.91)) , Recognizer:GlinerRecognizer
+2025-12-09 11:10:56,135 — DEBUG — PERSON: `Elizabeth Spence` (score=0.89)) , Recognizer:GlinerRecognizer
+2025-12-09 11:10:56,135 — DEBUG — PHONE_NUMBER: `+1-808-985-1299 x15500` (score=0.75)) , Recognizer:PhoneRecognizer
+2025-12-09 11:10:56,135 — DEBUG — PHONE_NUMBER: `819-316-4289` (score=0.75)) , Recognizer:PhoneRecognizer
+2025-12-09 11:10:56,135 — DEBUG — PHONE_NUMBER: `144.134.69.219` (score=0.40)) , Recognizer:PhoneRecognizer
+2025-12-09 11:10:56,135 — DEBUG — US_DRIVER_LICENSE: `x15500` (score=0.30)) , Recognizer:UsLicenseRecognizer
+2025-12-09 11:10:56,136 — DEBUG — PHONE_NUMBER: `3029 5190 3486 98` (score=0.20)) , Recognizer:RUPhoneRecognizer
+2025-12-09 11:10:56,136 — DEBUG — PHONE_NUMBER: `23664 8502` (score=0.20)) , Recognizer:RUPhoneRecognizer
+2025-12-09 11:10:56,136 — DEBUG — 
+>============================DEANONIMIZATION ENTRIES================================
+2025-12-09 11:10:56,136 — DEBUG — 	type: IP_ADDRESS;  value: 72.45.250.197;  operator: custom
+2025-12-09 11:10:56,136 — DEBUG — 	type: URL;  value: http://www.evans.com/;  operator: custom
+2025-12-09 11:10:56,136 — DEBUG — 	type: URL;  value: http://www.evans.com/;  operator: custom
+2025-12-09 11:10:56,137 — DEBUG — 	type: RU_ADDRESS;  value: London, City, 23664 8502 Ruiz;  operator: custom
+2025-12-09 11:10:56,137 — DEBUG — 	type: PHONE_NUMBER;  value: +1-940-888-8570x596;  operator: custom
+2025-12-09 11:10:56,137 — DEBUG — 	type: PHONE_NUMBER;  value: 001-747-617-3053x040;  operator: custom
+2025-12-09 11:10:56,137 — DEBUG — 	type: PHONE_NUMBER;  value: 3029 5190 3486 98;  operator: custom
+2025-12-09 11:10:56,137 — DEBUG — 	type: PERSON;  value: 795280835;  operator: custom
+2025-12-09 11:10:56,139 — DEBUG — 	type: PERSON;  value: Diana Jacobs;  operator: custom
+2025-12-09 11:10:56,139 — DEBUG — 	type: PERSON;  value: Preston Arnold;  operator: custom
+2025-12-09 11:10:56,141 — DEBUG — 
+>============================DEANONIMIZATION CONTEXT================================
+2025-12-09 11:10:56,141 — DEBUG — 
+/============================DEANONIMIZATION FAKED_VALUES:
+2025-12-09 11:10:56,142 — DEBUG — 	hash: 144 134 69 219;  true: 72.45.250.197;  fake: 144.134.69.219
+2025-12-09 11:10:56,142 — DEBUG — 	hash: http martin com;  true: http://www.evans.com/;  fake: http://martin.com/
+2025-12-09 11:10:56,142 — DEBUG — 	hash: 8502ruizcourse;  true: Cindy Glen;  fake: 8502 Ruiz Course
+2025-12-09 11:10:56,143 — DEBUG — 	hash: 898193164289;  true: +1-940-888-8570x596;  fake: 819-316-4289
+2025-12-09 11:10:56,143 — DEBUG — 	hash: 001809915500;  true: 001-747-617-3053x040;  fake: +1-808-985-1299x15500
+2025-12-09 11:10:56,143 — DEBUG — 	hash: 30295190348698;  true: 180094698295438;  fake: 30295190348698
+2025-12-09 11:10:56,144 — DEBUG — 	hash: ralphperez;  true: 795280835;  fake: Ralph Perez
+2025-12-09 11:10:56,144 — DEBUG — 	hash: elizabethspence;  true: Diana Jacobs;  fake: Elizabeth Spence
+2025-12-09 11:10:56,144 — DEBUG — 	hash: christinaperez;  true: Preston Arnold;  fake: Christina Perez
+2025-12-09 11:10:56,144 — DEBUG — 
+/============================DEANONIMIZATION TRUE_VALUES:
+2025-12-09 11:10:56,145 — DEBUG — 	hash: 72 45 250 197;  true: 72.45.250.197;  fake: 144.134.69.219
+2025-12-09 11:10:56,145 — DEBUG — 	hash: http www evans com;  true: http://www.evans.com/;  fake: http://martin.com/
+2025-12-09 11:10:56,145 — DEBUG — 	hash: cindyglen;  true: Cindy Glen;  fake: 8502 Ruiz Course
+2025-12-09 11:10:56,145 — DEBUG — 	hash: 961948570596;  true: +1-940-888-8570x596;  fake: 819-316-4289
+2025-12-09 11:10:56,145 — DEBUG — 	hash: 400013053040;  true: 001-747-617-3053x040;  fake: +1-808-985-1299x15500
+2025-12-09 11:10:56,145 — DEBUG — 	hash: 180094698295438;  true: 180094698295438;  fake: 30295190348698
+2025-12-09 11:10:56,145 — DEBUG — 	hash: 795280835;  true: 795280835;  fake: Ralph Perez
+2025-12-09 11:10:56,146 — DEBUG — 	hash: dianajacobs;  true: Diana Jacobs;  fake: Elizabeth Spence
+2025-12-09 11:10:56,146 — DEBUG — 	hash: prestonarnold;  true: Preston Arnold;  fake: Christina Perez

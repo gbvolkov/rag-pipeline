@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-import base64
 import json
 import logging
+import math
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, File, Form, Query, Request, UploadFile, status
@@ -15,11 +17,9 @@ from app.models.entities import (
     Artifact,
     Job,
     JobEvent,
-    ExampleProfile,
     Pipeline,
     PipelineIndexingConfig,
     PipelineInput,
-    PipelineSegmentationStage,
     Project,
     Retriever,
     RetrieverSession,
@@ -27,10 +27,15 @@ from app.models.entities import (
     RetrievalResultItem,
 )
 from app.schemas.artifacts import ArtifactLineageOut, ArtifactOut, IndexListItem
-from app.schemas.capabilities import CapabilityMatrixOut, ExampleCapabilityMatrixOut
+from app.schemas.capabilities import CapabilityMatrixOut
 from app.schemas.common import APIMessage, PaginatedResponse
 from app.schemas.jobs import JobDetailOut, JobEventOut, JobOut, ReindexRequest
-from app.schemas.pipelines import PipelineCopyRequest, PipelineCreate, PipelineOut
+from app.schemas.pipelines import (
+    PipelineCopyRequest,
+    PipelineCreate,
+    PipelineOut,
+    PipelineValidationResultOut,
+)
 from app.schemas.projects import ProjectCreate, ProjectOut, ProjectPatch, ProjectSummary
 from app.schemas.retrievers import (
     RetrievalResultOut,
@@ -41,8 +46,7 @@ from app.schemas.retrievers import (
     ScoredSegment,
 )
 from app.services.artifacts import artifact_versions, build_lineage_backward, build_lineage_forward
-from app.services.capabilities import capability_snapshot_to_response, get_or_create_capability_snapshot
-from app.services.example_profiles import get_example_capability_matrix
+from app.services.capabilities import get_capabilities_response
 from app.services.jobs import (
     assert_project_active,
     create_job,
@@ -50,14 +54,21 @@ from app.services.jobs import (
     init_session,
     query_retriever,
     release_session,
-    seed_example_profiles,
     transition_job,
 )
+from app.services.pipeline_advisory_validator import validate_pipeline_advisory
 from app.services.pipeline_validator import validate_pipeline
 from app.workers.tasks import run_mineru_job_task, run_pipeline_job_task, run_reindex_job_task
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_PRIMARY_SCORE_KEYS = (
+    "score",
+    "rerank_score",
+    "similarity_score",
+    "fuzzy_score",
+    "max_similarity_score",
+)
 
 
 def _paginate_query(q, *, offset: int, limit: int):
@@ -71,6 +82,82 @@ def _as_paginated(items: list[Any], total: int, offset: int, limit: int) -> dict
         "limit": limit,
         "items": items,
     }
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        converted = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(converted):
+        return None
+    return converted
+
+
+def _extract_score_details(segment_payload: dict[str, Any]) -> dict[str, float]:
+    details: dict[str, float] = {}
+
+    raw_details = segment_payload.get("score_details")
+    if isinstance(raw_details, dict):
+        for key, value in raw_details.items():
+            if not isinstance(key, str):
+                continue
+            converted = _coerce_float(value)
+            if converted is not None:
+                details[key] = converted
+
+    metadata = segment_payload.get("metadata")
+    if isinstance(metadata, dict):
+        for key, value in metadata.items():
+            if not isinstance(key, str) or key in details:
+                continue
+            if key != "score" and not key.endswith("_score"):
+                continue
+            converted = _coerce_float(value)
+            if converted is not None:
+                details[key] = converted
+
+    return details
+
+
+def _to_scored_segment(item: RetrievalResultItem) -> ScoredSegment:
+    segment_payload = item.segment_payload if isinstance(item.segment_payload, dict) else {}
+    score_details = _extract_score_details(segment_payload)
+    score = _coerce_float(item.score)
+    if score is None:
+        for key in _PRIMARY_SCORE_KEYS:
+            if key in score_details:
+                score = score_details[key]
+                break
+    return ScoredSegment(
+        score=score,
+        similarity_score=score_details.get("similarity_score"),
+        max_similarity_score=score_details.get("max_similarity_score"),
+        fuzzy_score=score_details.get("fuzzy_score"),
+        rerank_score=score_details.get("rerank_score"),
+        score_details=score_details,
+        segment=segment_payload,
+        segment_artifact_id=item.segment_artifact_id,
+    )
+
+
+def _to_retrieval_result_out(result: RetrievalResult, result_items: list[RetrievalResultItem]) -> RetrievalResultOut:
+    return RetrievalResultOut(
+        id=result.id,
+        project_id=result.project_id,
+        retriever_id=result.retriever_id,
+        query_text=result.query_text,
+        top_k=result.top_k,
+        created_at=result.created_at,
+        items=[_to_scored_segment(item) for item in result_items],
+    )
+
+
+def _pipeline_out(row: Pipeline, *, validation_warnings=None) -> PipelineOut:
+    out = PipelineOut.model_validate(row)
+    if validation_warnings is not None:
+        out.validation_warnings = list(validation_warnings)
+    return out
 
 
 def _project_summary(db: Session, project_id: str) -> ProjectSummary:
@@ -182,8 +269,8 @@ def archive_project(pid: str, db: Session = Depends(db_session)):
 @router.post("/projects/{pid}/pipelines", response_model=PipelineOut, status_code=status.HTTP_201_CREATED)
 def create_pipeline(pid: str, payload: PipelineCreate, db: Session = Depends(db_session)):
     assert_project_active(db, pid)
-    snapshot = get_or_create_capability_snapshot(db)
-    shape = validate_pipeline(payload, snapshot.capability_matrix)
+    shape = validate_pipeline(payload)
+    validation_warnings = validate_pipeline_advisory(payload)
 
     pipeline = Pipeline(
         project_id=pid,
@@ -209,18 +296,6 @@ def create_pipeline(pid: str, payload: PipelineCreate, db: Session = Depends(db_
             )
         )
 
-    for stage in payload.segmentation_stages:
-        db.add(
-            PipelineSegmentationStage(
-                pipeline_id=pipeline.id,
-                stage_name=stage.stage_name,
-                splitter_type=stage.splitter_type,
-                params=stage.params,
-                input_aliases=stage.input_aliases,
-                position=stage.position,
-            )
-        )
-
     if payload.indexing is not None:
         db.add(
             PipelineIndexingConfig(
@@ -234,7 +309,15 @@ def create_pipeline(pid: str, payload: PipelineCreate, db: Session = Depends(db_
 
     db.commit()
     db.refresh(pipeline)
-    return PipelineOut.model_validate(pipeline)
+    return _pipeline_out(pipeline, validation_warnings=validation_warnings)
+
+
+@router.post("/projects/{pid}/pipelines/validate", response_model=PipelineValidationResultOut)
+def validate_pipeline_endpoint(pid: str, payload: PipelineCreate, db: Session = Depends(db_session)):
+    assert_project_active(db, pid)
+    shape = validate_pipeline(payload)
+    validation_warnings = validate_pipeline_advisory(payload)
+    return PipelineValidationResultOut(shape=shape, validation_warnings=validation_warnings)
 
 
 @router.get("/projects/{pid}/pipelines", response_model=PaginatedResponse[PipelineOut])
@@ -247,7 +330,7 @@ def list_pipelines(
     stmt = select(Pipeline).where(Pipeline.project_id == pid, Pipeline.deleted.is_(False)).order_by(Pipeline.created_at.desc())
     total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
     rows = db.execute(_paginate_query(stmt, offset=offset, limit=limit)).scalars().all()
-    items = [PipelineOut.model_validate(row) for row in rows]
+    items = [_pipeline_out(row) for row in rows]
     return _as_paginated(items, total, offset, limit)
 
 
@@ -256,7 +339,7 @@ def get_pipeline(pid: str, plid: str, db: Session = Depends(db_session)):
     row = db.get(Pipeline, plid)
     if row is None or row.project_id != pid or row.deleted:
         raise NotFoundError("Pipeline not found")
-    return PipelineOut.model_validate(row)
+    return _pipeline_out(row)
 
 
 @router.post("/projects/{pid}/pipelines/{plid}/copy", response_model=PipelineOut, status_code=status.HTTP_201_CREATED)
@@ -290,20 +373,6 @@ def copy_pipeline(pid: str, plid: str, payload: PipelineCopyRequest, db: Session
             )
         )
 
-    for row in db.execute(
-        select(PipelineSegmentationStage).where(PipelineSegmentationStage.pipeline_id == source.id)
-    ).scalars():
-        db.add(
-            PipelineSegmentationStage(
-                pipeline_id=copied.id,
-                stage_name=row.stage_name,
-                splitter_type=row.splitter_type,
-                params=row.params,
-                input_aliases=row.input_aliases,
-                position=row.position,
-            )
-        )
-
     idx = db.execute(select(PipelineIndexingConfig).where(PipelineIndexingConfig.pipeline_id == source.id)).scalar_one_or_none()
     if idx:
         db.add(
@@ -318,7 +387,7 @@ def copy_pipeline(pid: str, plid: str, payload: PipelineCopyRequest, db: Session
 
     db.commit()
     db.refresh(copied)
-    return PipelineOut.model_validate(copied)
+    return _pipeline_out(copied)
 
 
 @router.delete("/projects/{pid}/pipelines/{plid}", response_model=APIMessage)
@@ -368,18 +437,19 @@ async def submit_run(
             payload.update(form_dict)
         except json.JSONDecodeError as exc:
             raise UnprocessableError("Invalid form payload JSON", details={"error": str(exc)}) from exc
+    if "file_content_b64" in payload or "text" in payload:
+        raise UnprocessableError(
+            "Inline file_content_b64/text payloads are unsupported; upload a file or use runtime_input documents/segments",
+        )
     if file is not None:
         content = await file.read()
-        payload["file_name"] = file.filename or "upload.bin"
-        payload["file_content_b64"] = base64.b64encode(content).decode("ascii")
-
-    example_profile_id = None
-    if payload.get("example_profile_id"):
-        profile_row = db.execute(
-            select(ExampleProfile).where(ExampleProfile.profile_id == payload["example_profile_id"])
-        ).scalar_one_or_none()
-        if profile_row:
-            example_profile_id = profile_row.id
+        suffix = Path(file.filename or "upload.bin").suffix or ".bin"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as fp:
+            fp.write(content)
+            payload["uploaded_file_path"] = fp.name
+        payload["file_name"] = file.filename or Path(payload["uploaded_file_path"]).name
+    if "example_profile_id" in payload:
+        raise UnprocessableError("example_profile_id is unsupported by the production API")
 
     job = create_job(
         db,
@@ -387,7 +457,6 @@ async def submit_run(
         pipeline_id=plid,
         kind="run_pipeline",
         payload=payload,
-        example_profile_id=example_profile_id,
     )
 
     loader_type = (pipeline.definition.get("loader") or {}).get("type")
@@ -399,13 +468,13 @@ async def submit_run(
     db.add(job)
     db.commit()
     logger.info(
-        "Run submitted: project_id=%s pipeline_id=%s job_id=%s celery_task_id=%s payload_keys=%s file_b64_len=%s",
+        "Run submitted: project_id=%s pipeline_id=%s job_id=%s celery_task_id=%s payload_keys=%s uploaded_file=%s",
         pid,
         plid,
         job.id,
         job.celery_task_id,
         sorted(payload.keys()),
-        len(payload.get("file_content_b64", "")) if isinstance(payload.get("file_content_b64"), str) else 0,
+        payload.get("uploaded_file_path"),
     )
     return {"job_id": job.id}
 
@@ -636,6 +705,7 @@ def create_retriever_endpoint(pid: str, payload: RetrieverCreate, db: Session = 
         db,
         project_id=pid,
         index_artifact_id=payload.index_artifact_id,
+        source_artifact_ids=payload.source_artifact_ids,
         retriever_type=payload.retriever_type,
         params=payload.params,
     )
@@ -701,20 +771,12 @@ def query_retriever_endpoint(
         project_id=pid,
         retriever=row,
         query_text=payload.query,
-        top_k=payload.top_k,
         session_id=payload.session_id,
     )
     items = db.execute(
         select(RetrievalResultItem).where(RetrievalResultItem.retrieval_result_id == result.id).order_by(RetrievalResultItem.rank.asc())
     ).scalars().all()
-    scored = [
-        ScoredSegment(
-            score=item.score,
-            segment=item.segment_payload,
-            segment_artifact_id=item.segment_artifact_id,
-        )
-        for item in items
-    ]
+    scored = [_to_scored_segment(item) for item in items]
     return {
         "retrieval_result_id": result.id,
         "items": [s.model_dump() for s in scored],
@@ -731,7 +793,8 @@ def release_retriever_endpoint(
     row = db.get(Retriever, rid)
     if row is None or row.project_id != pid:
         raise NotFoundError("Retriever not found")
-    count = release_session(db, row, session_id=(payload or {}).get("session_id"))
+    session_id = payload.get("session_id") if payload is not None else None
+    count = release_session(db, row, session_id=session_id)
     return APIMessage(message=f"Released {count} session(s)")
 
 
@@ -756,16 +819,7 @@ def list_retrieval_results(
             .where(RetrievalResultItem.retrieval_result_id == result.id)
             .order_by(RetrievalResultItem.rank.asc())
         ).scalars().all()
-        out = RetrievalResultOut.model_validate(result)
-        out.items = [
-            ScoredSegment(
-                score=item.score,
-                segment=item.segment_payload,
-                segment_artifact_id=item.segment_artifact_id,
-            )
-            for item in result_items
-        ]
-        items.append(out)
+        items.append(_to_retrieval_result_out(result, result_items))
     return _as_paginated(items, total, offset, limit)
 
 
@@ -777,21 +831,9 @@ def get_retrieval_result(pid: str, rlid: str, db: Session = Depends(db_session))
     items = db.execute(
         select(RetrievalResultItem).where(RetrievalResultItem.retrieval_result_id == row.id).order_by(RetrievalResultItem.rank.asc())
     ).scalars().all()
-    out = RetrievalResultOut.model_validate(row)
-    out.items = [
-        ScoredSegment(score=item.score, segment=item.segment_payload, segment_artifact_id=item.segment_artifact_id)
-        for item in items
-    ]
-    return out
+    return _to_retrieval_result_out(row, items)
 
 
 @router.get("/capabilities", response_model=CapabilityMatrixOut)
-def get_capabilities(db: Session = Depends(db_session)):
-    snapshot = get_or_create_capability_snapshot(db)
-    return capability_snapshot_to_response(snapshot)
-
-
-@router.get("/capabilities/examples", response_model=ExampleCapabilityMatrixOut)
-def get_examples_capabilities(db: Session = Depends(db_session)):
-    seed_example_profiles(db)
-    return get_example_capability_matrix(db)
+def get_capabilities():
+    return get_capabilities_response()

@@ -37,13 +37,7 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     minio_bucket: str = "rag-artifacts"
 
-    rag_lib_source_dir: Path = Path("C:/Projects/rag-lib/src/rag_lib")
-    rag_lib_examples_dir: Path = Path("C:/Projects/rag-lib/examples")
-
-    plugin_registry_file: Path = Path("./config/plugins.json")
-
 
 @lru_cache(1)
 def get_settings() -> Settings:
     return Settings()
-

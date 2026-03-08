@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if __package__ in {None, ""}:
+    raise SystemExit("Run this script as a module: python -m scripts.check_parity_drift")
 
 from app.services.capabilities import discover_capabilities
-from app.services.example_profiles import discover_examples
+from scripts.lib.example_profiles import discover_examples
 
 
 def main() -> int:
@@ -27,9 +25,10 @@ def main() -> int:
     missing = sorted(discovered_profiles - catalog_profiles)
     extra = sorted(catalog_profiles - discovered_profiles)
 
-    loaders = capabilities.get("loaders", {})
-    splitters = capabilities.get("splitters", {})
-    retrievers = capabilities.get("retrievers", {}).get("classes", {})
+    strict = capabilities.get("strict", {})
+    loaders = strict.get("loaders", {})
+    splitters = strict.get("splitters", {})
+    retrievers = strict.get("retrievers", {}).get("classes", {})
 
     print(f"loaders={len(loaders)} splitters={len(splitters)} retrievers={len(retrievers)} examples={len(examples)}")
     if missing:

@@ -3,17 +3,12 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
-# Support direct execution: `python scripts/run_pipeline_examples.py`
-# where sys.path[0] points to `scripts/` instead of the project root.
 if __package__ in {None, ""}:
-    PROJECT_ROOT = Path(__file__).resolve().parents[1]
-    if str(PROJECT_ROOT) not in sys.path:
-        sys.path.insert(0, str(PROJECT_ROOT))
+    raise SystemExit("Run this script as a module: python -m scripts.run_pipeline_examples")
 
 from scripts.lib.pipeline_example_export import SnapshotExporter, make_run_root
 from scripts.lib.pipeline_example_manifest import PipelineExampleSpec, load_manifest, select_examples
@@ -22,7 +17,7 @@ from scripts.lib.pipeline_example_runner import ApiClient, ExampleRunResult, Pip
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run pipeline example simulations against remote API.")
-    parser.add_argument("--base-url", required=False, default="http://localhost:8007/api/v1", help="Remote API base URL (for example: https://host/api/v1)")
+    parser.add_argument("--base-url", required=False, default="http://127.0.0.1:8007/api/v1", help="Remote API base URL (for example: https://host/api/v1)")
     parser.add_argument("--run-all", action="store_true", help="Run all manifest examples in batch mode")
     parser.add_argument("--interactive", action="store_true", help="Run in interactive selection mode")
     parser.add_argument("--examples", help="Comma-separated example IDs to run")
@@ -31,6 +26,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--token-env", default="RAG_API_TOKEN")
     parser.add_argument("--timeout-seconds", type=int, default=1200)
     parser.add_argument("--poll-interval-seconds", type=int, default=2)
+    parser.add_argument(
+        "--get-retry-attempts",
+        type=int,
+        default=5,
+        help="Retries for transient GET request socket/network errors",
+    )
+    parser.add_argument(
+        "--get-retry-backoff-seconds",
+        type=float,
+        default=0.5,
+        help="Base exponential backoff for transient GET request retries",
+    )
     parser.add_argument(
         "--continue-on-error",
         type=str,
@@ -60,14 +67,22 @@ def _parse_examples_arg(raw: str | None) -> list[str] | None:
     return values or None
 
 
-def _print_example_list(print_func: Callable[[str], None], specs: list[PipelineExampleSpec]) -> None:
+def _print_example_list(
+    print_func: Callable[[str], None],
+    specs: list[PipelineExampleSpec],
+    *,
+    executed_ids: set[str] | None = None,
+) -> None:
+    executed_ids = executed_ids or set()
     print_func("Available examples:")
     for idx, spec in enumerate(specs, start=1):
-        print_func(f"{idx:02d}. {spec.example_id} ({spec.source_example_file})")
+        suffix = " [done]" if spec.example_id in executed_ids else ""
+        print_func(f"{idx:02d}. {spec.example_id} ({spec.source_example_file}){suffix}")
 
 
 def _select_one_interactive(
     specs: list[PipelineExampleSpec],
+    executed_ids: set[str],
     input_func: Callable[[str], str],
     print_func: Callable[[str], None],
 ) -> PipelineExampleSpec | str:
@@ -75,7 +90,7 @@ def _select_one_interactive(
         raw = input_func("Select example (number/id), or command [list|all|quit]: ").strip()
         lowered = raw.lower()
         if lowered == "list":
-            _print_example_list(print_func, specs)
+            _print_example_list(print_func, specs, executed_ids=executed_ids)
             continue
         if lowered == "all":
             return "all"
@@ -84,12 +99,20 @@ def _select_one_interactive(
         if raw.isdigit():
             idx = int(raw) - 1
             if 0 <= idx < len(specs):
-                return specs[idx]
+                spec = specs[idx]
+                if spec.example_id in executed_ids:
+                    print_func("Example already executed. Select another one.")
+                    continue
+                return spec
             print_func("Invalid number. Try again.")
             continue
         matches = [spec for spec in specs if spec.example_id == raw]
         if matches:
-            return matches[0]
+            spec = matches[0]
+            if spec.example_id in executed_ids:
+                print_func("Example already executed. Select another one.")
+                continue
+            return spec
         print_func("Invalid input. Use number, example_id, list, all, or quit.")
 
 
@@ -128,13 +151,14 @@ def _run_interactive(
     print_func: Callable[[str], None],
 ) -> tuple[list[ExampleRunResult], bool]:
     pending = list(specs)
+    executed_ids: set[str] = set()
     results: list[ExampleRunResult] = []
     if not pending:
         return results, False
 
-    _print_example_list(print_func, pending)
+    _print_example_list(print_func, specs, executed_ids=executed_ids)
     while pending:
-        selected = _select_one_interactive(pending, input_func, print_func)
+        selected = _select_one_interactive(specs, executed_ids, input_func, print_func)
         if selected == "quit":
             return results, True
         if selected == "all":
@@ -143,6 +167,7 @@ def _run_interactive(
 
         result = runner.run_one(selected)
         results.append(result)
+        executed_ids.add(selected.example_id)
         pending = [spec for spec in pending if spec.example_id != selected.example_id]
         if not result.passed and not runner.config.continue_on_error:
             return results, False
@@ -202,7 +227,13 @@ def main(
 
     run_root = make_run_root(Path(args.results_dir))
     exporter = SnapshotExporter(run_root=run_root)
-    client = ApiClient(base_url=args.base_url, token=token, timeout_seconds=args.timeout_seconds)
+    client = ApiClient(
+        base_url=args.base_url,
+        token=token,
+        timeout_seconds=args.timeout_seconds,
+        get_retry_attempts=args.get_retry_attempts,
+        get_retry_backoff_seconds=args.get_retry_backoff_seconds,
+    )
     runner = PipelineExampleRunner(
         api_client=client,
         exporter=exporter,

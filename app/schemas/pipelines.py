@@ -6,19 +6,26 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class PluginRef(BaseModel):
-    plugin_ref: str = Field(min_length=1)
-
-
 JSONValue = str | int | float | bool | None | dict[str, Any] | list[Any]
 
 
 class LoaderConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     type: str = Field(min_length=1)
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class RuntimeInputConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    alias: str = Field(default="RUNTIME_INPUT", min_length=1)
+    artifact_kind: Literal["document", "segment"]
+
+
 class PipelineInputRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     alias: str = Field(min_length=1)
     source_pipeline_id: str
     source_stage_name: str
@@ -26,15 +33,20 @@ class PipelineInputRef(BaseModel):
     pinned_version: int | None = Field(default=None, ge=1)
 
 
-class SegmentationStageConfig(BaseModel):
+class PipelineStageConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     stage_name: str = Field(min_length=1)
-    splitter_type: str = Field(min_length=1)
+    stage_kind: Literal["splitter", "processor"]
+    component_type: str = Field(min_length=1)
     params: dict[str, Any] = Field(default_factory=dict)
     input_aliases: list[str] = Field(default_factory=list)
     position: int = Field(ge=0)
 
 
 class IndexingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     index_type: str = Field(min_length=1)
     params: dict[str, Any] = Field(default_factory=dict)
     collection_name: str | None = None
@@ -42,26 +54,40 @@ class IndexingConfig(BaseModel):
 
 
 class PipelineCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
     loader: LoaderConfig | None = None
+    runtime_input: RuntimeInputConfig | None = None
     inputs: list[PipelineInputRef] = Field(default_factory=list)
-    segmentation_stages: list[SegmentationStageConfig] = Field(default_factory=list)
+    stages: list[PipelineStageConfig] = Field(default_factory=list)
     indexing: IndexingConfig | None = None
     metadata: dict[str, JSONValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_shape(self) -> "PipelineCreate":
-        if self.loader and self.inputs:
-            raise ValueError("loader and inputs are mutually exclusive")
-        if not self.loader and not self.inputs:
-            raise ValueError("pipeline must define loader or inputs")
+        source_count = int(self.loader is not None) + int(self.runtime_input is not None) + int(bool(self.inputs))
+        if source_count > 1:
+            raise ValueError("loader, runtime_input, and inputs are mutually exclusive")
+        if source_count == 0:
+            raise ValueError("pipeline must define loader, runtime_input, or inputs")
         return self
+
+    def ordered_stages(self) -> list[PipelineStageConfig]:
+        return sorted(self.stages, key=lambda stage: stage.position)
 
 
 class PipelineCopyRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
+
+
+class PipelineValidationWarning(BaseModel):
+    code: str
+    message: str
+    path: str | None = None
+    details: dict[str, Any] | None = None
 
 
 class PipelineOut(BaseModel):
@@ -76,4 +102,9 @@ class PipelineOut(BaseModel):
     deleted: bool
     definition: dict[str, Any]
     created_at: datetime
+    validation_warnings: list[PipelineValidationWarning] = Field(default_factory=list)
 
+
+class PipelineValidationResultOut(BaseModel):
+    shape: str
+    validation_warnings: list[PipelineValidationWarning] = Field(default_factory=list)

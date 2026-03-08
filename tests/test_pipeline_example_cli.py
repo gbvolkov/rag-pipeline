@@ -6,7 +6,13 @@ from typing import Callable
 import pytest
 
 import scripts.run_pipeline_examples as cli
-from scripts.lib.pipeline_example_manifest import PipelineExampleManifest, PipelineExampleSpec, RetrievalPlan
+from scripts.lib.pipeline_example_manifest import (
+    PipelineExampleManifest,
+    PipelineExampleSpec,
+    PipelineRunSpec,
+    RetrievalPlan,
+    RetrievalQueryPlan,
+)
 from scripts.lib.pipeline_example_runner import ExampleRunResult
 
 
@@ -16,32 +22,50 @@ def _spec(example_id: str) -> PipelineExampleSpec:
         source_example_file=f"{example_id}.py",
         input_mode="text",
         input_spec={"text": f"payload-{example_id}"},
-        pipeline_create_payload={
-            "name": f"pipeline-{example_id}",
-            "loader": {"type": "TextLoader", "params": {}},
-            "inputs": [],
-            "segmentation_stages": [],
-            "indexing": {"index_type": "chroma", "params": {}},
-        },
-        run_payload_template={},
-        retrieval_plan=RetrievalPlan(
-            retriever_type="create_vector_retriever",
-            retriever_params={"top_k": 3},
-            requires_session=False,
-            query="hello",
-            top_k=3,
-            strict_match=False,
-        ),
+        runs=[
+            PipelineRunSpec(
+                run_name="main",
+                pipeline_create_payload={
+                    "name": f"pipeline-{example_id}",
+                    "loader": {"type": "TextLoader", "params": {}},
+                    "inputs": [],
+                    "stages": [],
+                    "indexing": {"index_type": "chroma", "params": {}},
+                },
+                run_payload_template={},
+                retrievals=[
+                    RetrievalPlan(
+                        name="vector",
+                        source_kind="index",
+                        source_stage_name=None,
+                        retriever_type="create_vector_retriever",
+                        retriever_params={"top_k": 3},
+                        requires_session=False,
+                        queries=[RetrievalQueryPlan(name="hello", query="hello", top_k=3, strict_match=False)],
+                    )
+                ],
+            )
+        ],
         expected_outcome="success",
         notes="test",
     )
 
 
 class _FakeApiClient:
-    def __init__(self, base_url: str, token: str, timeout_seconds: int):
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        timeout_seconds: int,
+        *,
+        get_retry_attempts: int = 5,
+        get_retry_backoff_seconds: float = 0.5,
+    ):
         self.base_url = base_url
         self.token = token
         self.timeout_seconds = timeout_seconds
+        self.get_retry_attempts = get_retry_attempts
+        self.get_retry_backoff_seconds = get_retry_backoff_seconds
 
 
 class _FakeRunner:
@@ -82,7 +106,7 @@ def _setup_cli_mocks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pipelin
     _FakeRunner.instances = []
     _FakeRunner.fail_ids = set()
 
-    manifest = PipelineExampleManifest(version="v1", examples=[_spec("ex1"), _spec("ex2"), _spec("ex3")])
+    manifest = PipelineExampleManifest(version="v2", examples=[_spec("ex1"), _spec("ex2"), _spec("ex3")])
 
     run_root = tmp_path / "results" / "20260304T000000Z"
     run_root.mkdir(parents=True, exist_ok=True)
@@ -152,6 +176,22 @@ def test_cli_interactive_list_invalid_then_select_and_all(monkeypatch: pytest.Mo
     assert runner.run_one_calls == ["ex2"]
     assert runner.run_many_calls == [["ex1", "ex3"]]
     assert any("Invalid input" in line for line in output)
+
+
+def test_cli_interactive_selection_is_stable_after_execution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _setup_cli_mocks(monkeypatch, tmp_path)
+    output: list[str] = []
+
+    rc = cli.main(
+        ["--base-url", "http://api.local/api/v1", "--interactive"],
+        input_func=_next_input(["2", "select", "2", "3", "quit"]),
+        print_func=output.append,
+    )
+
+    assert rc == 0
+    runner = _FakeRunner.instances[-1]
+    assert runner.run_one_calls == ["ex2", "ex3"]
+    assert any("already executed" in line.lower() for line in output)
 
 
 def test_cli_interactive_quit_before_any_execution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

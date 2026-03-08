@@ -1,1032 +1,1633 @@
-version: "v1"
+version: v2
 examples:
-  - example_id: "01_text_basic"
-    source_example_file: "01_text_basic.py"
-    input_mode: "file"
-    input_spec:
-      file: "terms&defs.txt"
+- example_id: 01_text_basic
+  source_example_file: 01_text_basic.py
+  input_mode: file
+  input_spec:
+    file: terms&defs.txt
+  runs:
+  - run_name: main
     pipeline_create_payload:
-      name: "01_text_basic_pipeline"
-      description: "Text loader + regex logical split + token chunks + dual-like indexing"
+      name: 01_text_basic_pipeline
       loader:
-        type: "TextLoader"
+        type: TextLoader
         params: {}
       inputs: []
-      segmentation_stages:
-        - stage_name: "logical_regex"
-          splitter_type: "RegexSplitter"
-          params:
-            pattern: "(?=##Term:)"
-            chunk_size: 4096
-            chunk_overlap: 0
-          input_aliases: ["LOADING"]
-          position: 0
-        - stage_name: "token_chunks"
-          splitter_type: "TokenTextSplitter"
-          params:
-            chunk_size: 150
-            chunk_overlap: 15
-            model_name: "cl100k_base"
-          input_aliases: ["logical_regex"]
-          position: 1
-      indexing:
-        index_type: "chroma"
+      stages:
+      - stage_name: logical_regex
+        stage_kind: splitter
+        component_type: RegexSplitter
         params:
-          embeddings_provider: "openai"
+          pattern: (?=##Term:)
+        input_aliases:
+        - LOADING
+        position: 0
+      - stage_name: token_chunks
+        stage_kind: splitter
+        component_type: TokenTextSplitter
+        params:
+          chunk_size: 150
+          chunk_overlap: 15
+          model_name: cl100k_base
+        input_aliases:
+        - logical_regex
+        position: 1
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: &id002
+            object_type: create_embeddings_model
+            provider: openai
+            model_name: text-embedding-3-small
           cleanup: true
-          collection_name: "01_text_basic"
+          collection_name: 01_text_basic
           dual_storage: true
-          doc_store_path: "./data/docstore/01_text_basic.pkl"
-        collection_name: "01_text_basic"
-        docstore_name: "01_text_basic_docstore"
+          doc_store_path: ./data/docstore/01_text_basic.pkl
+        collection_name: 01_text_basic
+        docstore_name: 01_text_basic_docstore
     run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_scored_dual_storage_retriever"
-      retriever_params:
-        id_key: "parent_id"
-        search_kwargs:
-          k: 8
+    retrievals:
+    - name: dual
+      source:
+        kind: index
+      create:
+        retriever_type: create_scored_dual_storage_retriever
+        params:
+          id_key: parent_id
+          search_kwargs:
+            k: 10
+          search_type: similarity_score_threshold
+          score_threshold: 0.5
       requires_session: false
-      query: "Что такое CRM?"
-      top_k: 5
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Simulates text basic dual-storage pattern."
-
-  - example_id: "02_markdown_enrichment"
-    source_example_file: "02_markdown_enrichment.py"
-    input_mode: "file"
-    input_spec:
-      file: "quotes.toscrape.com_index.md"
-    pipeline_create_payload:
-      name: "02_markdown_enrichment_pipeline"
-      description: "Markdown enrichment simulation with fuzzy retrieval over indexed chunks."
-      loader:
-        type: "TextLoader"
-        params: {}
-      inputs: []
-      segmentation_stages:
-        - stage_name: "md_recursive"
-          splitter_type: "RecursiveCharacterTextSplitter"
-          params:
-            chunk_size: 1000
-            chunk_overlap: 100
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "02_markdown_enrichment"
-        collection_name: "02_markdown_enrichment"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "FuzzyRetriever"
-      retriever_params:
-        threshold: 45
-        mode: "wratio"
-      requires_session: false
-      query: "einstein quotes"
-      top_k: 3
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Enrichment processor is not directly modeled; retrieval intent is preserved."
-
-  - example_id: "02_markdown_enrichment_vector"
-    source_example_file: "02_markdown_enrichment_vector.py"
-    input_mode: "file"
-    input_spec:
-      file: "quotes.toscrape.com_index.md"
-    pipeline_create_payload:
-      name: "02_markdown_enrichment_vector_pipeline"
-      description: "Markdown recursive split + vector indexing + vector retrieval."
-      loader:
-        type: "TextLoader"
-        params: {}
-      inputs: []
-      segmentation_stages:
-        - stage_name: "md_recursive"
-          splitter_type: "RecursiveCharacterTextSplitter"
-          params:
-            chunk_size: 1000
-            chunk_overlap: 100
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "faiss"
-        params:
-          embeddings_provider: "openai"
-          collection_name: "02_markdown_enrichment_vector"
-        collection_name: "02_markdown_enrichment_vector"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
-        top_k: 3
-        search_type: "similarity"
-      requires_session: false
-      query: "einstein quotes"
-      top_k: 3
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Matches vector-search variant of markdown example."
-
-  - example_id: "03_pdf_semantic"
-    source_example_file: "03_pdf_semantic.py"
-    input_mode: "file"
-    input_spec:
-      file: "2025_soo_frp_russkij-yazyk_10_11-2.pdf"
-    pipeline_create_payload:
-      name: "03_pdf_semantic_pipeline"
-      description: "PDF text extraction + hierarchy split + vector index."
-      loader:
-        type: "PDFLoader"
-        params:
-          parse_mode: "text"
-      inputs: []
-      segmentation_stages:
-        - stage_name: "structured"
-          splitter_type: "RegexHierarchySplitter"
-          params:
-            patterns:
-              - [1, "^\\s*#\\s+(.+)$"]
-              - [2, "^\\s*##\\s+(.+)$"]
-            include_parent_content: true
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "03_pdf_semantic"
-        collection_name: "03_pdf_semantic"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
+      queries:
+      - name: what_is_1c_crm
+        query: Что такое 1C  CRM?
         top_k: 10
-        search_type: "similarity"
-      requires_session: false
-      query: "Что такое морфология?"
-      top_k: 5
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Reranking stage is approximated by base vector retrieval."
-
-  - example_id: "04_pdf_raptor"
-    source_example_file: "04_pdf_raptor.py"
-    input_mode: "file"
-    input_spec:
-      file: "Georgy Volkov ru.pdf"
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 02_markdown_enrichment
+  source_example_file: 02_markdown_enrichment.py
+  input_mode: file
+  input_spec:
+    file: quotes.toscrape.com_index.md
+  runs:
+  - run_name: main
     pipeline_create_payload:
-      name: "04_pdf_raptor_pipeline"
-      description: "PDF + sentence chunks + dual-storage-like index/retrieval."
+      name: 02_markdown_enrichment_pipeline
       loader:
-        type: "PDFLoader"
-        params:
-          parse_mode: "text"
-      inputs: []
-      segmentation_stages:
-        - stage_name: "sentences"
-          splitter_type: "SentenceSplitter"
-          params:
-            chunk_size: 220
-            chunk_overlap: 20
-            language: "auto"
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          dual_storage: true
-          doc_store_path: "./data/docstore/04_pdf_raptor.pkl"
-          collection_name: "04_pdf_raptor"
-        collection_name: "04_pdf_raptor"
-        docstore_name: "04_pdf_raptor_docstore"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_scored_dual_storage_retriever"
-      retriever_params:
-        id_key: "segment_id"
-        search_kwargs:
-          k: 10
-      requires_session: false
-      query: "CIO Europe"
-      top_k: 5
-      strict_match: false
-    expected_outcome: "success"
-    notes: "RAPTOR tree behavior is approximated with sentence segmentation and dual-style retrieval."
-
-  - example_id: "05_docx_graph"
-    source_example_file: "05_docx_graph.py"
-    input_mode: "file"
-    input_spec:
-      file: "Параметризованные задачи.docx"
-    pipeline_create_payload:
-      name: "05_docx_graph_pipeline"
-      description: "DOCX + hierarchical segmentation + vector index as graph-proxy."
-      loader:
-        type: "DocXLoader"
+        type: TextLoader
         params: {}
       inputs: []
-      segmentation_stages:
-        - stage_name: "docx_structure"
-          splitter_type: "RegexHierarchySplitter"
-          params:
-            patterns:
-              - [1, "^\\s*#\\s+(.+)$"]
-              - [2, "^\\s*##\\s+(.+)$"]
-            include_parent_content: true
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
+      stages:
+      - stage_name: md_recursive
+        stage_kind: splitter
+        component_type: RecursiveCharacterTextSplitter
         params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "05_docx_graph"
-        collection_name: "05_docx_graph"
+          chunk_size: 1000
+          chunk_overlap: 100
+        input_aliases:
+        - LOADING
+        position: 0
+      - stage_name: enriched
+        stage_kind: processor
+        component_type: SegmentEnricher
+        params:
+          llm: &id001
+            object_type: create_llm
+            provider: openai
+            model_name: gpt-4.1-nano
+            temperature: 0
+            streaming: false
+        input_aliases:
+        - md_recursive
+        position: 1
     run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
-        top_k: 6
-        search_type: "similarity"
+    retrievals:
+    - name: fuzzy
+      source:
+        kind: stage
+        stage_name: enriched
+      create:
+        retriever_type: FuzzyRetriever
+        params:
+          threshold: 45
+          mode: wratio
       requires_session: false
-      query: "risk management requirements"
-      top_k: 5
-      strict_match: false
-    expected_outcome: "success"
-    notes: "Graph retriever is approximated with vector retrieval path."
-
-  - example_id: "06_docx_regex"
-    source_example_file: "06_docx_regex.py"
-    input_mode: "file"
-    input_spec:
-      file: "KP_IT_IB_Strategy_Recalc_v7_AppC.docx"
-    pipeline_create_payload:
-      name: "06_docx_regex_pipeline"
-      description: "DOCX regex segmentation flow."
-      loader:
-        type: "DocXLoader"
-        params: {}
-      inputs: []
-      segmentation_stages:
-        - stage_name: "docx_regex"
-          splitter_type: "RegexSplitter"
-          params:
-            pattern: "(?i)(^|\\n)(раздел|section|risk|риск)"
-            chunk_size: 1200
-            chunk_overlap: 0
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "06_docx_regex"
-        collection_name: "06_docx_regex"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "RegexRetriever"
-      retriever_params:
-        pattern: "(?i)risk|риск"
-      requires_session: false
-      query: "risk"
-      top_k: 5
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Regex-centric retrieval policy preserved."
-
-  - example_id: "07_csv_table_summary"
-    source_example_file: "07_csv_table_summary.py"
-    input_mode: "file"
-    input_spec:
-      file: "data.csv"
-    pipeline_create_payload:
-      name: "07_csv_table_summary_pipeline"
-      description: "CSV table loader/splitter pattern."
-      loader:
-        type: "CSVLoader"
-        params:
-          output_format: "csv"
-      inputs: []
-      segmentation_stages:
-        - stage_name: "csv_tables"
-          splitter_type: "CSVTableSplitter"
-          params:
-            max_rows_per_chunk: 20
-            max_chunk_size: 2000
-            delimiter: ","
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "07_csv_table_summary"
-        collection_name: "07_csv_table_summary"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
-        top_k: 4
-        search_type: "similarity"
-      requires_session: false
-      query: "Продукт уровень 3"
-      top_k: 3
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Table summary simulation via CSV splitter and vector retrieval."
-
-  - example_id: "07_md_table_summary"
-    source_example_file: "07_md_table_summary.py"
-    input_mode: "file"
-    input_spec:
-      file: "07_md_table_summary_input_ru.md"
-    pipeline_create_payload:
-      name: "07_md_table_summary_pipeline"
-      description: "Markdown table splitter flow."
-      loader:
-        type: "TextLoader"
-        params: {}
-      inputs: []
-      segmentation_stages:
-        - stage_name: "md_tables"
-          splitter_type: "MarkdownTableSplitter"
-          params: {}
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "07_md_table_summary"
-        collection_name: "07_md_table_summary"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
-        top_k: 4
-        search_type: "similarity"
-      requires_session: false
-      query: "какой канал имеет лучшую конверсию"
-      top_k: 3
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Markdown table extraction and vector retrieval path."
-
-  - example_id: "08_excel_csv_basic"
-    source_example_file: "08_excel_csv_basic.py"
-    input_mode: "file"
-    input_spec:
-      file: "08_result.xlsx"
-    pipeline_create_payload:
-      name: "08_excel_csv_basic_pipeline"
-      description: "Excel loader in CSV mode."
-      loader:
-        type: "ExcelLoader"
-        params:
-          output_format: "csv"
-      inputs: []
-      segmentation_stages:
-        - stage_name: "excel_csv_chunks"
-          splitter_type: "CSVTableSplitter"
-          params:
-            max_rows_per_chunk: 10
-            max_chunk_size: 1500
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "08_excel_csv_basic"
-        collection_name: "08_excel_csv_basic"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
-        top_k: 4
-        search_type: "similarity"
-      requires_session: false
-      query: "Тестирование уязвимостей"
-      top_k: 3
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Excel->CSV variant."
-
-  - example_id: "08_excel_md_basic"
-    source_example_file: "08_excel_md_basic.py"
-    input_mode: "file"
-    input_spec:
-      file: "08_result.xlsx"
-    pipeline_create_payload:
-      name: "08_excel_md_basic_pipeline"
-      description: "Excel loader in markdown mode."
-      loader:
-        type: "ExcelLoader"
-        params:
-          output_format: "markdown"
-      inputs: []
-      segmentation_stages:
-        - stage_name: "excel_md_tables"
-          splitter_type: "MarkdownTableSplitter"
-          params: {}
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "08_excel_md_basic"
-        collection_name: "08_excel_md_basic"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
-        top_k: 4
-        search_type: "similarity"
-      requires_session: false
-      query: "Тестирование уязвимостей"
-      top_k: 3
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Excel->Markdown variant."
-
-  - example_id: "09_json_hybrid"
-    source_example_file: "09_json_hybrid.py"
-    input_mode: "file"
-    input_spec:
-      file: "QA_data.json"
-    pipeline_create_payload:
-      name: "09_json_hybrid_pipeline"
-      description: "JSON loader + JsonSplitter + vector index."
-      loader:
-        type: "JsonLoader"
-        params:
-          output_format: "json"
-          schema: "."
-          ensure_ascii: false
-      inputs: []
-      segmentation_stages:
-        - stage_name: "json_nodes"
-          splitter_type: "JsonSplitter"
-          params:
-            schema: "."
-            ensure_ascii: false
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "09_json_hybrid"
-        collection_name: "09_json_hybrid"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
+      queries:
+      - name: einstein
+        query: einstein
         top_k: 5
-        search_type: "similarity"
-      requires_session: false
-      query: "WEB:CRM"
-      top_k: 3
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Hybrid metadata filtering is approximated with vector retrieval only."
-
-  - example_id: "10_text_ensemble"
-    source_example_file: "10_text_ensemble.py"
-    input_mode: "file"
-    input_spec:
-      file: "terms&defs.txt"
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 02_markdown_enrichment_vector
+  source_example_file: 02_markdown_enrichment_vector.py
+  input_mode: file
+  input_spec:
+    file: quotes.toscrape.com_index.md
+  runs:
+  - run_name: main
     pipeline_create_payload:
-      name: "10_text_ensemble_pipeline"
-      description: "Sentence chunks with lexical retrieval approximation for ensemble flow."
+      name: 02_markdown_enrichment_vector_pipeline
       loader:
-        type: "TextLoader"
+        type: TextLoader
         params: {}
       inputs: []
-      segmentation_stages:
-        - stage_name: "sentences"
-          splitter_type: "SentenceSplitter"
-          params:
-            chunk_size: 300
-            chunk_overlap: 30
-            language: "auto"
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
+      stages:
+      - stage_name: md_recursive
+        stage_kind: splitter
+        component_type: RecursiveCharacterTextSplitter
         params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "10_text_ensemble"
-        collection_name: "10_text_ensemble"
+          chunk_size: 1000
+          chunk_overlap: 100
+        input_aliases:
+        - LOADING
+        position: 0
+      - stage_name: enriched
+        stage_kind: processor
+        component_type: SegmentEnricher
+        params:
+          llm: *id001
+        input_aliases:
+        - md_recursive
+        position: 1
+      indexing:
+        index_type: faiss
+        params:
+          embeddings: *id002
+          collection_name: 02_markdown_enrichment_vector
+        collection_name: 02_markdown_enrichment_vector
     run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_bm25_retriever"
-      retriever_params:
-        top_k: 5
-      requires_session: true
-      query: "Cost of risk"
-      top_k: 3
-      strict_match: false
-    expected_outcome: "success"
-    notes: "Ensemble behavior approximated with BM25 lexical retrieval path."
-
-  - example_id: "11_log_regex_loader"
-    source_example_file: "11_log_regex_loader.py"
-    input_mode: "file"
-    input_spec:
-      file: "anon.log"
+    retrievals:
+    - name: vector
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 2
+      requires_session: false
+      queries:
+      - name: einstein_quotes
+        query: einstein quotes
+        top_k: 2
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 03_pdf_semantic
+  source_example_file: 03_pdf_semantic.py
+  input_mode: file
+  input_spec:
+    file: 2025_soo_frp_russkij-yazyk_10_11-2.pdf
+  runs:
+  - run_name: main
     pipeline_create_payload:
-      name: "11_log_regex_loader_pipeline"
-      description: "RegexHierarchyLoader + regex hierarchy splitter."
+      name: 03_pdf_semantic_pipeline
       loader:
-        type: "RegexHierarchyLoader"
+        type: PyMuPDFLoader
+        params:
+          output_format: markdown
+      inputs: []
+      stages:
+      - stage_name: structured
+        stage_kind: splitter
+        component_type: RegexHierarchySplitter
         params:
           patterns:
-            - [1, "^\\d{4}-\\d{2}-\\d{2}"]
-      inputs: []
-      segmentation_stages:
-        - stage_name: "log_hierarchy"
-          splitter_type: "RegexHierarchySplitter"
-          params:
-            patterns:
-              - [1, "^\\d{4}-\\d{2}-\\d{2}"]
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
+          - - 1
+            - ^\s*#\s+(.+)$
+          - - 2
+            - ^\s*##\s+(.+)$
+          - - 3
+            - ^\s*###\s+(.+)$
+          - - 1
+            - ^\s*\*\*(.+?)\*\*\s*$
+          exclude_patterns:
+          - ^\s*\d+\s*$
+          include_parent_content: false
+        input_aliases:
+        - LOADING
+        position: 0
+      - stage_name: semantic
+        stage_kind: splitter
+        component_type: SemanticChunker
         params:
-          embeddings_provider: "openai"
+          embeddings: *id002
+          threshold_type: fixed
+          threshold: 0.8
+          window_size: 4
+        input_aliases:
+        - structured
+        position: 1
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
           cleanup: true
-          collection_name: "11_log_regex_loader"
-        collection_name: "11_log_regex_loader"
+          collection_name: 03_pdf_semantic
+        collection_name: 03_pdf_semantic
     run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "RegexRetriever"
-      retriever_params:
-        pattern: "(?i)credit card"
+    retrievals:
+    - name: vector
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 10
       requires_session: false
-      query: "Credit card"
-      top_k: 3
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Regex loader flow uses regex retrieval policy."
-
-  - example_id: "12_qa_loader"
-    source_example_file: "12_qa_loader.py"
-    input_mode: "file"
-    input_spec:
-      file: "interview.txt"
-    pipeline_create_payload:
-      name: "12_qa_loader_pipeline"
-      description: "QA splitter flow with lexical retrieval."
-      loader:
-        type: "TextLoader"
-        params: {}
-      inputs: []
-      segmentation_stages:
-        - stage_name: "qa_pairs"
-          splitter_type: "QASplitter"
-          params: {}
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
+      queries:
+      - name: morphology_vector
+        query: Что такое морфология?
+        top_k: 10
+        strict_match: true
+    - name: reranked
+      source:
+        kind: index
+      create:
+        retriever_type: create_reranking_retriever
         params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "12_qa_loader"
-        collection_name: "12_qa_loader"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_bm25_retriever"
-      retriever_params:
-        top_k: 4
-      requires_session: true
-      query: "graph database experience"
-      top_k: 3
-      strict_match: true
-    expected_outcome: "success"
-    notes: "QA lexical retrieval mapped to BM25 retriever."
-
-  - example_id: "13_dual_storage"
-    source_example_file: "13_dual_storage.py"
-    input_mode: "text"
-    input_spec:
-      text: "Dual storage keeps compact searchable chunks and hydrated parent context."
-    pipeline_create_payload:
-      name: "13_dual_storage_pipeline"
-      description: "Token chunks + dual-storage index and retriever."
-      loader:
-        type: "TextLoader"
-        params: {}
-      inputs: []
-      segmentation_stages:
-        - stage_name: "token_chunks"
-          splitter_type: "TokenTextSplitter"
-          params:
-            chunk_size: 35
-            chunk_overlap: 8
-            model_name: "cl100k_base"
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          dual_storage: true
-          doc_store_path: "./data/docstore/13_dual_storage.pkl"
-          collection_name: "13_dual_storage"
-        collection_name: "13_dual_storage"
-        docstore_name: "13_dual_storage_docstore"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_scored_dual_storage_retriever"
-      retriever_params:
-        id_key: "segment_id"
-        search_kwargs:
-          k: 8
+          base_retriever_or_list:
+            retriever_type: create_vector_retriever
+            params:
+              top_k: 10
+          top_k: 3
+          reranker_model: BAAI/bge-reranker-v2-m3
+          max_score_ratio: 0.08
+          device: cpu
       requires_session: false
-      query: "What is retrieval augmented generation and why use it?"
-      top_k: 5
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Dual storage example pattern."
-
-  - example_id: "14_mineru_pdf"
-    source_example_file: "14_mineru_pdf.py"
-    input_mode: "file"
-    input_spec:
-      file: "statement.pdf"
-    pipeline_create_payload:
-      name: "14_mineru_pdf_pipeline"
-      description: "MinerU loader pipeline."
-      loader:
-        type: "MinerULoader"
-        params:
-          parse_mode: "txt"
-      inputs: []
-      segmentation_stages:
-        - stage_name: "mineru_recursive"
-          splitter_type: "RecursiveCharacterTextSplitter"
-          params:
-            chunk_size: 1200
-            chunk_overlap: 120
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "14_mineru_pdf"
-        collection_name: "14_mineru_pdf"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
-        top_k: 4
-        search_type: "similarity"
-      requires_session: false
-      query: "statement date"
-      top_k: 3
-      strict_match: false
-    expected_outcome: "success"
-    notes: "May fail if MinerU optional dependency is unavailable."
-
-  - example_id: "15_pptx_unsupported"
-    source_example_file: "15_pptx_unsupported.py"
-    input_mode: "file"
-    input_spec:
-      file: "Digitme Презентация.pptx"
-    pipeline_create_payload:
-      name: "15_pptx_unsupported_pipeline"
-      description: "Intentional unsupported PPTX path expected to fail at runtime."
-      loader:
-        type: "TextLoader"
-        params: {}
-      inputs: []
-      segmentation_stages:
-        - stage_name: "fallback_split"
-          splitter_type: "RecursiveCharacterTextSplitter"
-          params:
-            chunk_size: 500
-            chunk_overlap: 20
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "15_pptx_unsupported"
-        collection_name: "15_pptx_unsupported"
-    run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
+      queries:
+      - name: morphology_reranked
+        query: Что такое морфология?
         top_k: 3
-        search_type: "similarity"
-      requires_session: false
-      query: "presentation scope"
-      top_k: 2
-      strict_match: false
-    expected_outcome: "error"
-    notes: "Expected runtime failure reproducing unsupported PPTX behavior."
-
-  - example_id: "16_html_html"
-    source_example_file: "16_html_html.py"
-    input_mode: "file"
-    input_spec:
-      file: "15_test.html"
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 04_pdf_raptor
+  source_example_file: 04_pdf_raptor.py
+  input_mode: file
+  input_spec:
+    file: Georgy Volkov ru.pdf
+  runs:
+  - run_name: main
     pipeline_create_payload:
-      name: "16_html_html_pipeline"
-      description: "HTML loader in html mode + html split + recursive chunks."
+      name: 04_pdf_raptor_pipeline
       loader:
-        type: "HTMLLoader"
+        type: PDFLoader
         params:
-          output_format: "html"
+          parse_mode: text
       inputs: []
-      segmentation_stages:
-        - stage_name: "html_blocks"
-          splitter_type: "HTMLSplitter"
-          params: {}
-          input_aliases: ["LOADING"]
-          position: 0
-        - stage_name: "html_child_chunks"
-          splitter_type: "RecursiveCharacterTextSplitter"
-          params:
-            chunk_size: 1000
-            chunk_overlap: 120
-          input_aliases: ["html_blocks"]
-          position: 1
-      indexing:
-        index_type: "chroma"
+      stages:
+      - stage_name: sentences
+        stage_kind: splitter
+        component_type: SentenceSplitter
         params:
-          embeddings_provider: "openai"
+          chunk_size: 200
+          chunk_overlap: 20
+          language: auto
+        input_aliases:
+        - LOADING
+        position: 0
+      - stage_name: raptor_tree
+        stage_kind: processor
+        component_type: RaptorProcessor
+        params:
+          llm: *id001
+          embeddings: *id002
+          max_levels: 3
+        input_aliases:
+        - sentences
+        position: 1
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
           cleanup: true
+          collection_name: 04_pdf_raptor
           dual_storage: true
-          doc_store_path: "./data/docstore/16_html_html.pkl"
-          collection_name: "16_html_html"
-        collection_name: "16_html_html"
-        docstore_name: "16_html_html_docstore"
+          doc_store_path: ./data/docstore/04_pdf_raptor.pkl
+        collection_name: 04_pdf_raptor
+        docstore_name: 04_pdf_raptor_docstore
     run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_scored_dual_storage_retriever"
-      retriever_params:
-        id_key: "parent_id"
-        search_kwargs:
-          k: 8
+    retrievals:
+    - name: dual
+      source:
+        kind: index
+      create:
+        retriever_type: create_scored_dual_storage_retriever
+        params:
+          id_key: parent_id
+          search_kwargs:
+            k: 10
+          search_type: similarity_score_threshold
+          hydration_mode: children_enriched
       requires_session: false
-      query: "Which order has damaged packaging?"
-      top_k: 6
-      strict_match: true
-    expected_outcome: "success"
-    notes: "HTML output format variant."
-
-  - example_id: "16_html_md"
-    source_example_file: "16_html_md.py"
-    input_mode: "file"
-    input_spec:
-      file: "15_test.html"
+      queries:
+      - name: cio_europe
+        query: CIO Europe
+        top_k: 10
+        strict_match: false
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 05_docx_graph
+  source_example_file: 05_docx_graph.py
+  input_mode: file
+  input_spec:
+    file: Параметризованные задачи.docx
+  runs:
+  - run_name: main
     pipeline_create_payload:
-      name: "16_html_md_pipeline"
-      description: "HTML loader in markdown mode + html split + recursive chunks."
+      name: 05_docx_graph_pipeline
       loader:
-        type: "HTMLLoader"
-        params:
-          output_format: "markdown"
+        type: DocXLoader
+        params: {}
       inputs: []
-      segmentation_stages:
-        - stage_name: "html_blocks"
-          splitter_type: "HTMLSplitter"
-          params: {}
-          input_aliases: ["LOADING"]
-          position: 0
-        - stage_name: "html_child_chunks"
-          splitter_type: "RecursiveCharacterTextSplitter"
-          params:
-            chunk_size: 1000
-            chunk_overlap: 120
-          input_aliases: ["html_blocks"]
-          position: 1
-      indexing:
-        index_type: "chroma"
+      stages:
+      - stage_name: docx_structure
+        stage_kind: splitter
+        component_type: RegexHierarchySplitter
         params:
-          embeddings_provider: "openai"
+          patterns:
+          - - 1
+            - ^\s*#\s+(.+)$
+          - - 2
+            - ^\s*##\s+(.+)$
+          - - 3
+            - ^\s*###\s+(.+)$
+          - - 4
+            - ^\s*####\s+(.+)$
+          exclude_patterns:
+          - ^\s*$
+          include_parent_content: false
+        input_aliases:
+        - LOADING
+        position: 0
+      - stage_name: graph_entities
+        stage_kind: processor
+        component_type: EntityExtractor
+        params:
+          llm: *id001
+          store:
+            object_type: NetworkXGraphStore
+        input_aliases:
+        - docx_structure
+        position: 1
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
           cleanup: true
+          collection_name: 05_docx_graph
+        collection_name: 05_docx_graph
+    run_payload_template: {}
+    retrievals:
+    - name: graph_local
+      source:
+        kind: index
+      create:
+        retriever_type: GraphRetriever
+        params:
+          config:
+            object_type: GraphQueryConfig
+            mode: local
+            max_hops: 1
+            top_k_entities: 6
+            top_k_relations: 8
+            top_k_chunks: 6
+            min_score: 0.55
+            token_budget_entities: 450
+            token_budget_relations: 650
+            token_budget_chunks: 2400
+            enable_keyword_extraction: true
+            vector_relevance_mode: strict_0_1
+      requires_session: false
+      queries:
+      - name: probability_theory_local
+        query: Теория вероятности
+        top_k: 10
+        strict_match: false
+      - name: probability_local
+        query: вероятность
+        top_k: 10
+        strict_match: false
+    - name: graph_mix
+      source:
+        kind: index
+      create:
+        retriever_type: GraphRetriever
+        params:
+          config:
+            object_type: GraphQueryConfig
+            mode: mix
+            max_hops: 1
+            top_k_entities: 6
+            top_k_relations: 10
+            top_k_chunks: 8
+            min_score: 0.5
+            token_budget_entities: 450
+            token_budget_relations: 700
+            token_budget_chunks: 2350
+            enable_keyword_extraction: true
+            vector_relevance_mode: strict_0_1
+      requires_session: false
+      queries:
+      - name: probability_theory_mix
+        query: Теория вероятности
+        top_k: 10
+        strict_match: false
+      - name: probability_mix
+        query: вероятность
+        top_k: 10
+        strict_match: false
+    - name: graph_global
+      source:
+        kind: index
+      create:
+        retriever_type: GraphRetriever
+        params:
+          config:
+            object_type: GraphQueryConfig
+            mode: global
+            max_hops: 1
+            top_k_entities: 8
+            top_k_relations: 12
+            top_k_chunks: 6
+            min_score: 0.45
+            token_budget_entities: 600
+            token_budget_relations: 1200
+            token_budget_chunks: 1700
+            enable_keyword_extraction: true
+            vector_relevance_mode: strict_0_1
+      requires_session: false
+      queries:
+      - name: probability_theory_global
+        query: Теория вероятности
+        top_k: 10
+        strict_match: false
+      - name: probability_global
+        query: вероятность
+        top_k: 10
+        strict_match: false
+    - name: graph_hybrid
+      source:
+        kind: index
+      create:
+        retriever_type: GraphRetriever
+        params:
+          config:
+            object_type: GraphQueryConfig
+            mode: hybrid
+            max_hops: 1
+            top_k_entities: 8
+            top_k_relations: 10
+            top_k_chunks: 7
+            min_score: 0.5
+            token_budget_entities: 550
+            token_budget_relations: 900
+            token_budget_chunks: 2000
+            enable_keyword_extraction: true
+            vector_relevance_mode: strict_0_1
+      requires_session: false
+      queries:
+      - name: probability_theory_hybrid
+        query: Теория вероятности
+        top_k: 10
+        strict_match: false
+      - name: probability_hybrid
+        query: вероятность
+        top_k: 10
+        strict_match: false
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 06_docx_regex
+  source_example_file: 06_docx_regex.py
+  input_mode: file
+  input_spec:
+    file: KP_IT_IB_Strategy_Recalc_v7_AppC.docx
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 06_docx_regex_pipeline
+      loader:
+        type: DocXLoader
+        params: {}
+      inputs: []
+      stages:
+      - stage_name: docx_regex
+        stage_kind: splitter
+        component_type: RegexSplitter
+        params:
+          pattern: (?m)(?=^(?:#\s+\d+\.\s+.+|##\s+\d+\.\d+\.\s+.+|###\s+Этап\s+(?:Э\d+|PA)\.\s+.+|\*\*(?:D\d+-\d+|PA-\d+)\.\s+.+\*\*|-\s+(?:D\d+-\d+|PA-\d+)\.\s+.+|\|\s*(?:D\d+-\d+|PA-\d+)\s*\|))
+          chunk_size: 1200
+          chunk_overlap: 0
+        input_aliases:
+        - LOADING
+        position: 0
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 06_docx_regex
+        collection_name: 06_docx_regex
+    run_payload_template: {}
+    retrievals:
+    - name: regex
+      source:
+        kind: stage
+        stage_name: docx_regex
+      create:
+        retriever_type: RegexRetriever
+        params: {}
+      requires_session: false
+      queries:
+      - name: scope_of_work
+        query: Состав работ
+        top_k: 5
+        strict_match: true
+      - name: team
+        query: Команда
+        top_k: 5
+        strict_match: true
+      - name: effort
+        query: трудозатраты
+        top_k: 5
+        strict_match: true
+      - name: phases
+        query: этапы работ
+        top_k: 5
+        strict_match: true
+      - name: cost
+        query: Стоимость
+        top_k: 5
+        strict_match: true
+      - name: goal
+        query: Цель проекта
+        top_k: 5
+        strict_match: true
+    - name: vector
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 5
+      requires_session: false
+      queries:
+      - name: scope_of_work_vector
+        query: Состав работ
+        top_k: 5
+        strict_match: true
+      - name: team_vector
+        query: Команда
+        top_k: 5
+        strict_match: true
+      - name: effort_vector
+        query: трудозатраты
+        top_k: 5
+        strict_match: true
+      - name: phases_vector
+        query: этапы работ
+        top_k: 5
+        strict_match: true
+      - name: cost_vector
+        query: Стоимость
+        top_k: 5
+        strict_match: true
+      - name: goal_vector
+        query: Цель проекта
+        top_k: 5
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 07_csv_table_summary
+  source_example_file: 07_csv_table_summary.py
+  input_mode: file
+  input_spec:
+    file: data.csv
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 07_csv_table_summary_pipeline
+      loader:
+        type: CSVLoader
+        params:
+          output_format: csv
+      inputs: []
+      stages:
+      - stage_name: csv_tables
+        stage_kind: splitter
+        component_type: CSVTableSplitter
+        params:
+          max_rows_per_chunk: 2
+          max_chunk_size: 500
+          summarizer: &id003
+            object_type: LLMTableSummarizer
+            llm: *id001
+          summarize_table: true
+          summarize_chunks: true
+          inject_summaries_into_content: true
+        input_aliases:
+        - LOADING
+        position: 0
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 07_csv_table_summary
+        collection_name: 07_csv_table_summary
+    run_payload_template: {}
+    retrievals:
+    - name: vector
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 3
+      requires_session: false
+      queries:
+      - name: product_level_3
+        query: Продукт уровень 3 ТУРИСТИЧЕСКАЯ
+        top_k: 3
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 07_md_table_summary
+  source_example_file: 07_md_table_summary.py
+  input_mode: file
+  input_spec:
+    file: 07_md_table_summary_input_ru.md
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 07_md_table_summary_pipeline
+      loader:
+        type: TextLoader
+        params: {}
+      inputs: []
+      stages:
+      - stage_name: md_tables
+        stage_kind: splitter
+        component_type: MarkdownTableSplitter
+        params:
+          split_table_rows: true
+          max_rows_per_chunk: 1
+          summarizer: *id003
+          summarize_table: true
+          summarize_chunks: false
+          inject_summaries_into_content: true
+        input_aliases:
+        - LOADING
+        position: 0
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 07_md_table_summary
+        collection_name: 07_md_table_summary
+    run_payload_template: {}
+    retrievals:
+    - name: vector
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 3
+      requires_session: false
+      queries:
+      - name: best_conversion_channel
+        query: какой канал имеет лучшую конверсию
+        top_k: 3
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 08_excel_csv_basic
+  source_example_file: 08_excel_csv_basic.py
+  input_mode: file
+  input_spec:
+    file: 08_result.xlsx
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 08_excel_csv_basic_pipeline
+      loader:
+        type: ExcelLoader
+        params:
+          output_format: csv
+      inputs: []
+      stages:
+      - stage_name: excel_csv_chunks
+        stage_kind: splitter
+        component_type: CSVTableSplitter
+        params:
+          max_rows_per_chunk: 10
+          max_chunk_size: 100
+        input_aliases:
+        - LOADING
+        position: 0
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 08_excel_csv_basic
+        collection_name: 08_excel_csv_basic
+    run_payload_template: {}
+    retrievals:
+    - name: vector
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 3
+      requires_session: false
+      queries:
+      - name: vulnerability_testing_csv
+        query: Тестирование уязвимостей
+        top_k: 3
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 08_excel_md_basic
+  source_example_file: 08_excel_md_basic.py
+  input_mode: file
+  input_spec:
+    file: 08_result.xlsx
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 08_excel_md_basic_pipeline
+      loader:
+        type: ExcelLoader
+        params: {}
+      inputs: []
+      stages:
+      - stage_name: excel_md_tables
+        stage_kind: splitter
+        component_type: MarkdownTableSplitter
+        params:
+          split_table_rows: true
+          max_rows_per_chunk: 3
+        input_aliases:
+        - LOADING
+        position: 0
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 08_excel_md_basic
+        collection_name: 08_excel_md_basic
+    run_payload_template: {}
+    retrievals:
+    - name: vector
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 3
+      requires_session: false
+      queries:
+      - name: vulnerability_testing_md
+        query: Тестирование уязвимостей
+        top_k: 3
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 09_json_hybrid
+  source_example_file: 09_json_hybrid.py
+  input_mode: file
+  input_spec:
+    file: QA_data.json
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 09_json_hybrid_pipeline
+      loader:
+        type: JsonLoader
+        params:
+          output_format: json
+          schema: .
+          ensure_ascii: false
+      inputs: []
+      stages:
+      - stage_name: json_nodes
+        stage_kind: splitter
+        component_type: JsonSplitter
+        params:
+          schema: .
+          ensure_ascii: false
+        input_aliases:
+        - LOADING
+        position: 0
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 09_json_hybrid
+        collection_name: 09_json_hybrid
+    run_payload_template: {}
+    retrievals:
+    - name: vector_basic
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 3
+      requires_session: false
+      queries:
+      - name: web_crm_basic
+        query: WEB:CRM
+        top_k: 3
+        strict_match: true
+    - name: vector_common_filter
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 3
+          filter:
+            json_index: 0
+      requires_session: false
+      queries:
+      - name: web_crm_common_filter
+        query: WEB:CRM
+        top_k: 3
+        strict_match: true
+    - name: vector_json_filter
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 3
+          filter:
+            json__metadata__it_system: 1С:CRM
+      requires_session: false
+      queries:
+      - name: web_crm_json_filter
+        query: WEB:CRM
+        top_k: 3
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 10_text_ensemble
+  source_example_file: 10_text_ensemble.py
+  input_mode: file
+  input_spec:
+    file: terms&defs.txt
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 10_text_ensemble_pipeline
+      loader:
+        type: TextLoader
+        params: {}
+      inputs: []
+      stages:
+      - stage_name: sentences
+        stage_kind: splitter
+        component_type: SentenceSplitter
+        params:
+          chunk_size: 300
+          chunk_overlap: 30
+          language: auto
+        input_aliases:
+        - LOADING
+        position: 0
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 10_text_ensemble
+        collection_name: 10_text_ensemble
+    run_payload_template: {}
+    retrievals:
+    - name: bm25
+      source:
+        kind: stage
+        stage_name: sentences
+      create:
+        retriever_type: create_bm25_retriever
+        params:
+          top_k: 3
+      requires_session: false
+      queries:
+      - name: cost_of_risk_bm25
+        query: Cost of risk
+        top_k: 3
+        strict_match: true
+    - name: vector
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 3
+      requires_session: false
+      queries:
+      - name: cost_of_risk_vector
+        query: Cost of risk
+        top_k: 3
+        strict_match: true
+    - name: ensemble
+      source:
+        kind: index
+      create:
+        retriever_type: create_ensemble_retriever
+        params:
+          retrievers:
+          - retriever_type: create_bm25_retriever
+            params:
+              top_k: 3
+          - retriever_type: create_vector_retriever
+            params:
+              top_k: 3
+          weights:
+          - 0.5
+          - 0.5
+      requires_session: false
+      queries:
+      - name: cost_of_risk_ensemble
+        query: Cost of risk
+        top_k: 3
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 11_log_regex_loader
+  source_example_file: 11_log_regex_loader.py
+  input_mode: file
+  input_spec:
+    file: anon.log
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 11_log_regex_loader_pipeline
+      loader:
+        type: RegexHierarchyLoader
+        params:
+          patterns:
+          - - 1
+            - ^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})
+      inputs: []
+      stages:
+      - stage_name: log_hierarchy
+        stage_kind: splitter
+        component_type: RegexHierarchySplitter
+        params:
+          patterns:
+          - - 1
+            - ^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})
+        input_aliases:
+        - LOADING
+        position: 0
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 11_log_regex_loader
+        collection_name: 11_log_regex_loader
+    run_payload_template: {}
+    retrievals:
+    - name: vector
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 3
+      requires_session: false
+      queries:
+      - name: credit_card
+        query: Credit card
+        top_k: 3
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 12_qa_loader
+  source_example_file: 12_qa_loader.py
+  input_mode: file
+  input_spec:
+    file: interview.txt
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 12_qa_loader_pipeline
+      loader:
+        type: TextLoader
+        params: {}
+      inputs: []
+      stages:
+      - stage_name: qa_pairs
+        stage_kind: splitter
+        component_type: QASplitter
+        params: {}
+        input_aliases:
+        - LOADING
+        position: 0
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 12_qa_loader
+        collection_name: 12_qa_loader
+    run_payload_template: {}
+    retrievals:
+    - name: vector
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 3
+      requires_session: false
+      queries:
+      - name: graph_database_experience
+        query: graph database experience
+        top_k: 3
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 13_dual_storage
+  source_example_file: 13_dual_storage.py
+  input_mode: segments
+  input_spec:
+    segments:
+    - segment_id: doc_rag
+      content: Retrieval Augmented Generation (RAG) combines retrieval and generation. A retriever finds relevant external
+        context and the generator uses that context to produce grounded responses with lower hallucination risk.
+      metadata:
+        title: RAG Definition
+        topic: rag
+      type: text
+      original_format: text
+      path:
+      - dual_storage_demo.txt
+      level: 0
+    - segment_id: doc_indexing
+      content: Dual storage keeps compact searchable chunks in a vector index while storing full parent documents in a document
+        store. Retrieval finds chunk matches first and then hydrates the associated parent document.
+      metadata:
+        title: Dual Storage Indexing
+        topic: indexing
+      type: text
+      original_format: text
+      path:
+      - dual_storage_demo.txt
+      level: 0
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 13_dual_storage_pipeline
+      runtime_input:
+        alias: PARENTS
+        artifact_kind: segment
+      inputs: []
+      stages:
+      - stage_name: token_chunks
+        stage_kind: splitter
+        component_type: TokenTextSplitter
+        params:
+          chunk_size: 35
+          chunk_overlap: 8
+          model_name: cl100k_base
+        input_aliases:
+        - PARENTS
+        position: 0
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 13_dual_storage
           dual_storage: true
-          doc_store_path: "./data/docstore/16_html_md.pkl"
-          collection_name: "16_html_md"
-        collection_name: "16_html_md"
-        docstore_name: "16_html_md_docstore"
+          doc_store_path: ./data/docstore/13_dual_storage.pkl
+        collection_name: 13_dual_storage
+        docstore_name: 13_dual_storage_docstore
     run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_scored_dual_storage_retriever"
-      retriever_params:
-        id_key: "parent_id"
-        search_kwargs:
-          k: 8
-      requires_session: false
-      query: "Which project belongs to A. Novak and what stage is it in?"
-      top_k: 6
-      strict_match: true
-    expected_outcome: "success"
-    notes: "Markdown output format variant."
-
-  - example_id: "17A_web_loader_plantpad"
-    source_example_file: "17A_web_loader_plantpad.py"
-    input_mode: "url"
-    input_spec:
-      url: "https://plantpad.samlab.cn/search.html"
-    pipeline_create_payload:
-      name: "17A_web_loader_plantpad_pipeline"
-      description: "Plantpad web loader simulation."
-      loader:
-        type: "WebLoader"
+    retrievals:
+    - name: dual
+      source:
+        kind: index
+      create:
+        retriever_type: create_scored_dual_storage_retriever
         params:
-          depth: 2
-          output_format: "markdown"
-          fetch_mode: "requests_fallback_playwright"
-          crawl_scope: "same_host"
-          follow_download_links: false
+          id_key: parent_id
+          search_kwargs:
+            k: 5
+          search_type: similarity_score_threshold
+          score_threshold: 0.0
+      requires_session: false
+      queries:
+      - name: what_is_rag
+        query: What is retrieval augmented generation and why use it?
+        top_k: 5
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 14_mineru_pdf
+  source_example_file: 14_mineru_pdf.py
+  input_mode: file
+  input_spec:
+    file: statement.pdf
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 14_mineru_pdf_pipeline
+      loader:
+        type: MinerULoader
+        params:
+          parse_mode: txt
+          timeout_seconds: 1200
+          start_page: 0
+          end_page: 4
+          parse_formula: false
+          parse_table: false
       inputs: []
-      segmentation_stages:
-        - stage_name: "web_chunks"
-          splitter_type: "RecursiveCharacterTextSplitter"
-          params:
-            chunk_size: 1200
-            chunk_overlap: 80
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
+      stages:
+      - stage_name: mineru_recursive
+        stage_kind: splitter
+        component_type: RecursiveCharacterTextSplitter
         params:
-          embeddings_provider: "openai"
+          chunk_size: 1200
+          chunk_overlap: 120
+        input_aliases:
+        - LOADING
+        position: 0
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
           cleanup: true
-          collection_name: "17A_web_loader_plantpad"
-        collection_name: "17A_web_loader_plantpad"
+          collection_name: 14_mineru_pdf
+        collection_name: 14_mineru_pdf
     run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
-        top_k: 4
-        search_type: "similarity"
+    retrievals:
+    - name: vector
+      source:
+        kind: index
+      create:
+        retriever_type: create_vector_retriever
+        params:
+          top_k: 3
       requires_session: false
-      query: "plant disease"
-      top_k: 3
-      strict_match: false
-    expected_outcome: "success"
-    notes: "Dynamic-site behavior may depend on Playwright availability."
-
-  - example_id: "17B_web_loader_quotes"
-    source_example_file: "17B_web_loader_quotes.py"
-    input_mode: "url"
-    input_spec:
-      url: "https://quotes.toscrape.com"
+      queries:
+      - name: statement_date
+        query: statement date
+        top_k: 3
+        strict_match: false
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 15_pptx_unsupported
+  source_example_file: 15_pptx_unsupported.py
+  input_mode: file
+  input_spec:
+    file: Digitme Презентация.pptx
+  runs:
+  - run_name: main
     pipeline_create_payload:
-      name: "17B_web_loader_quotes_pipeline"
-      description: "Quotes site web loader simulation."
+      name: 15_pptx_unsupported_pipeline
       loader:
-        type: "WebLoader"
+        type: PPTXLoader
+        params: {}
+      inputs: []
+      stages: []
+    run_payload_template: {}
+    retrievals: []
+  expected_outcome: error
+  notes: Expected pipeline creation failure because rag-lib exposes no PPTXLoader.
+- example_id: 16_html_html
+  source_example_file: 16_html_html.py
+  input_mode: file
+  input_spec:
+    file: 15_test.html
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 16_html_html_pipeline
+      loader:
+        type: HTMLLoader
+        params:
+          output_format: html
+      inputs: []
+      stages:
+      - stage_name: html_blocks
+        stage_kind: splitter
+        component_type: HTMLSplitter
+        params:
+          output_format: html
+          split_table_rows: true
+          max_rows_per_chunk: 6
+          use_first_row_as_header: true
+          include_parent_content: false
+        input_aliases:
+        - LOADING
+        position: 0
+      - stage_name: html_child_chunks
+        stage_kind: splitter
+        component_type: RecursiveCharacterTextSplitter
+        params:
+          chunk_size: 1000
+          chunk_overlap: 120
+        input_aliases:
+        - html_blocks
+        position: 1
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 16_html_html
+          dual_storage: true
+          doc_store_path: ./data/docstore/16_html_html.pkl
+        collection_name: 16_html_html
+        docstore_name: 16_html_html_docstore
+    run_payload_template: {}
+    retrievals:
+    - name: dual
+      source:
+        kind: index
+      create:
+        retriever_type: create_scored_dual_storage_retriever
+        params:
+          id_key: parent_id
+          search_kwargs:
+            k: 6
+          search_type: similarity_score_threshold
+          score_threshold: 0.0
+      requires_session: false
+      queries:
+      - name: damaged_packaging
+        query: Which order has damaged packaging?
+        top_k: 6
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 16_html_md
+  source_example_file: 16_html_md.py
+  input_mode: file
+  input_spec:
+    file: 15_test.html
+  runs:
+  - run_name: main
+    pipeline_create_payload:
+      name: 16_html_md_pipeline
+      loader:
+        type: HTMLLoader
+        params:
+          output_format: html
+      inputs: []
+      stages:
+      - stage_name: html_blocks
+        stage_kind: splitter
+        component_type: HTMLSplitter
+        params:
+          output_format: markdown
+          split_table_rows: true
+          max_rows_per_chunk: 6
+          use_first_row_as_header: true
+          include_parent_content: false
+        input_aliases:
+        - LOADING
+        position: 0
+      - stage_name: html_child_chunks
+        stage_kind: splitter
+        component_type: RecursiveCharacterTextSplitter
+        params:
+          chunk_size: 1000
+          chunk_overlap: 120
+        input_aliases:
+        - html_blocks
+        position: 1
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          collection_name: 16_html_md
+          dual_storage: true
+          doc_store_path: ./data/docstore/16_html_md.pkl
+        collection_name: 16_html_md
+        docstore_name: 16_html_md_docstore
+    run_payload_template: {}
+    retrievals:
+    - name: dual
+      source:
+        kind: index
+      create:
+        retriever_type: create_scored_dual_storage_retriever
+        params:
+          id_key: parent_id
+          search_kwargs:
+            k: 6
+          search_type: similarity_score_threshold
+          score_threshold: 0.0
+      requires_session: false
+      queries:
+      - name: project_stage
+        query: Which project belongs to A. Novak and what stage is it in?
+        top_k: 6
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 17A_web_loader_plantpad
+  source_example_file: 17A_web_loader_plantpad.py
+  input_mode: url
+  input_spec:
+    url: https://plantpad.samlab.cn/search.html
+  runs:
+  - run_name: sync
+    pipeline_create_payload:
+      name: 17A_web_loader_plantpad_sync
+      loader:
+        type: WebLoader
         params:
           depth: 3
-          output_format: "markdown"
-          fetch_mode: "requests"
-          crawl_scope: "same_host"
+          output_format: markdown
+          fetch_mode: playwright
+          crawl_scope: same_host
           follow_download_links: false
+          cleanup_config: &id004
+            object_type: WebCleanupConfig
+            duplicate_tags:
+            - div
+            - p
+            - table
+            non_recursive_classes:
+            - tag
+            navigation_classes:
+            - menus
+            navigation_styles: []
+            navigation_texts:
+            - <
+            - '>'
+            ignored_classes:
+            - header
+          playwright_visible: true
+          playwright_navigation_config:
+            object_type: PlaywrightNavigationConfig
+            enabled: true
+            max_clicks: 512
+            max_states: 513
+          playwright_extraction_config:
+            object_type: PlaywrightExtractionConfig
+            profiles:
+            - object_type: PlaywrightProfileConfig
+              profile: paginated_eval
+              script_args:
+                keyword: ''
+              seed_script: "async ({ keyword }) => {\n  const current = new URL(window.location.href);\n  if (!current.pathname.endsWith(\"\
+                /search.html\")) {\n    return false;\n  }\n\n  const app = document.querySelector(\"#app\");\n  const vm\
+                \ = app && app.__vue__;\n  if (!vm) {\n    return false;\n  }\n\n  const sleep = (ms) => new Promise((resolve)\
+                \ => setTimeout(resolve, ms));\n  if ((!Array.isArray(vm.search_result) || vm.search_result.length === 0)\
+                \ && typeof vm.doSearch === \"function\") {\n    if (keyword && typeof vm.search_context === \"string\" &&\
+                \ !vm.search_context.trim()) {\n      vm.search_context = keyword;\n      const searchInput = document.querySelector(\"\
+                .search_input\");\n      if (searchInput) {\n        searchInput.value = keyword;\n      }\n    }\n    vm.page\
+                \ = 0;\n    vm.doSearch();\n    await sleep(900);\n  }\n\n  if ((!Array.isArray(vm.search_result) || vm.search_result.length\
+                \ === 0) && typeof vm.getSearchData === \"function\") {\n    vm.page = 0;\n    vm.getSearchData();\n    await\
+                \ sleep(900);\n  }\n\n  return true;\n}"
+              extract_script: "() => {\n  const current = new URL(window.location.href);\n  if (!current.pathname.endsWith(\"\
+                /search.html\")) {\n    return [];\n  }\n  const app = document.querySelector(\"#app\");\n  const vm = app\
+                \ && app.__vue__;\n  if (!vm || !Array.isArray(vm.search_result)) {\n    return [];\n  }\n\n  const urls =\
+                \ [];\n  for (const item of vm.search_result) {\n    const rawId = item && (item.img_id ?? item.imgId ?? item.id);\n\
+                \    if (rawId === undefined || rawId === null || rawId === \"\") {\n      continue;\n    }\n    urls.push(`disease.html?img_id=${encodeURIComponent(String(rawId))}`);\n\
+                \  }\n  return urls;\n}"
+              next_page_script: "() => {\n  const current = new URL(window.location.href);\n  if (!current.pathname.endsWith(\"\
+                /search.html\")) {\n    return false;\n  }\n  const app = document.querySelector(\"#app\");\n  const vm =\
+                \ app && app.__vue__;\n  if (!vm || typeof vm.nextPage !== \"function\") {\n    return false;\n  }\n  if (vm.top)\
+                \ {\n    return false;\n  }\n  const before = Number(vm.page || 0);\n  vm.nextPage();\n  const after = Number(vm.page\
+                \ || 0);\n  return after > before;\n}"
+              max_pages: 512
+              wait_after_action_ms: 700
+              source_tag: vue-search
+              source_classes:
+              - table-button
       inputs: []
-      segmentation_stages:
-        - stage_name: "web_chunks"
-          splitter_type: "RecursiveCharacterTextSplitter"
-          params:
-            chunk_size: 1200
-            chunk_overlap: 80
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "17B_web_loader_quotes"
-        collection_name: "17B_web_loader_quotes"
+      stages: []
     run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
-        top_k: 4
-        search_type: "similarity"
-      requires_session: false
-      query: "Einstein quote"
-      top_k: 3
-      strict_match: false
-    expected_outcome: "success"
-    notes: "Sync quotes web loader variant."
-
-  - example_id: "17C_web_loader_example"
-    source_example_file: "17C_web_loader_example.py"
-    input_mode: "url"
-    input_spec:
-      url: "https://example.com"
+    retrievals: []
+  - run_name: async
     pipeline_create_payload:
-      name: "17C_web_loader_example_pipeline"
-      description: "example.com web loader simulation."
+      name: 17A_web_loader_plantpad_async
       loader:
-        type: "WebLoader"
+        type: AsyncWebLoader
+        params:
+          depth: 3
+          output_format: markdown
+          fetch_mode: playwright
+          crawl_scope: same_host
+          follow_download_links: false
+          max_concurrency: 4
+          cleanup_config: *id004
+          playwright_visible: true
+          playwright_navigation_config:
+            object_type: PlaywrightNavigationConfig
+            enabled: true
+            max_clicks: 512
+            max_states: 513
+          playwright_extraction_config:
+            object_type: PlaywrightExtractionConfig
+            profiles:
+            - object_type: PlaywrightProfileConfig
+              profile: paginated_eval
+              script_args:
+                keyword: ''
+              seed_script: "async ({ keyword }) => {\n  const current = new URL(window.location.href);\n  if (!current.pathname.endsWith(\"\
+                /search.html\")) {\n    return false;\n  }\n\n  const app = document.querySelector(\"#app\");\n  const vm\
+                \ = app && app.__vue__;\n  if (!vm) {\n    return false;\n  }\n\n  const sleep = (ms) => new Promise((resolve)\
+                \ => setTimeout(resolve, ms));\n  if ((!Array.isArray(vm.search_result) || vm.search_result.length === 0)\
+                \ && typeof vm.doSearch === \"function\") {\n    if (keyword && typeof vm.search_context === \"string\" &&\
+                \ !vm.search_context.trim()) {\n      vm.search_context = keyword;\n      const searchInput = document.querySelector(\"\
+                .search_input\");\n      if (searchInput) {\n        searchInput.value = keyword;\n      }\n    }\n    vm.page\
+                \ = 0;\n    vm.doSearch();\n    await sleep(900);\n  }\n\n  if ((!Array.isArray(vm.search_result) || vm.search_result.length\
+                \ === 0) && typeof vm.getSearchData === \"function\") {\n    vm.page = 0;\n    vm.getSearchData();\n    await\
+                \ sleep(900);\n  }\n\n  return true;\n}"
+              extract_script: "() => {\n  const current = new URL(window.location.href);\n  if (!current.pathname.endsWith(\"\
+                /search.html\")) {\n    return [];\n  }\n  const app = document.querySelector(\"#app\");\n  const vm = app\
+                \ && app.__vue__;\n  if (!vm || !Array.isArray(vm.search_result)) {\n    return [];\n  }\n\n  const urls =\
+                \ [];\n  for (const item of vm.search_result) {\n    const rawId = item && (item.img_id ?? item.imgId ?? item.id);\n\
+                \    if (rawId === undefined || rawId === null || rawId === \"\") {\n      continue;\n    }\n    urls.push(`disease.html?img_id=${encodeURIComponent(String(rawId))}`);\n\
+                \  }\n  return urls;\n}"
+              next_page_script: "() => {\n  const current = new URL(window.location.href);\n  if (!current.pathname.endsWith(\"\
+                /search.html\")) {\n    return false;\n  }\n  const app = document.querySelector(\"#app\");\n  const vm =\
+                \ app && app.__vue__;\n  if (!vm || typeof vm.nextPage !== \"function\") {\n    return false;\n  }\n  if (vm.top)\
+                \ {\n    return false;\n  }\n  const before = Number(vm.page || 0);\n  vm.nextPage();\n  const after = Number(vm.page\
+                \ || 0);\n  return after > before;\n}"
+              max_pages: 512
+              wait_after_action_ms: 700
+              source_tag: vue-search
+              source_classes:
+              - table-button
+      inputs: []
+      stages: []
+    run_payload_template: {}
+    retrievals: []
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 17B_web_loader_quotes
+  source_example_file: 17B_web_loader_quotes.py
+  input_mode: url
+  input_spec:
+    url: https://quotes.toscrape.com
+  runs:
+  - run_name: sync
+    pipeline_create_payload:
+      name: 17B_web_loader_quotes_sync
+      loader:
+        type: WebLoader
+        params:
+          depth: 3
+          output_format: markdown
+          fetch_mode: requests
+          crawl_scope: same_host
+          follow_download_links: false
+          cleanup_config: &id005
+            object_type: WebCleanupConfig
+            duplicate_tags: []
+            non_recursive_classes:
+            - tag
+            navigation_classes:
+            - side_categories
+            - pager
+            ignored_classes:
+            - footer
+            - row header-box
+            - breadcrumb
+            - header container-fluid
+            - icon-star
+            - image_container
+      inputs: []
+      stages: []
+    run_payload_template: {}
+    retrievals: []
+  - run_name: async
+    pipeline_create_payload:
+      name: 17B_web_loader_quotes_async
+      loader:
+        type: AsyncWebLoader
+        params:
+          depth: 3
+          output_format: markdown
+          fetch_mode: requests_fallback_playwright
+          crawl_scope: same_host
+          follow_download_links: false
+          max_concurrency: 4
+          cleanup_config: *id005
+      inputs: []
+      stages: []
+    run_payload_template: {}
+    retrievals: []
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 17C_web_loader_example
+  source_example_file: 17C_web_loader_example.py
+  input_mode: url
+  input_spec:
+    url: https://example.com
+  runs:
+  - run_name: sync
+    pipeline_create_payload:
+      name: 17C_web_loader_example_sync
+      loader:
+        type: WebLoader
         params:
           depth: 2
-          output_format: "markdown"
-          fetch_mode: "requests"
-          crawl_scope: "allow_all"
+          output_format: markdown
+          fetch_mode: requests
+          crawl_scope: allow_all
           follow_download_links: false
+          cleanup_config: &id006
+            object_type: WebCleanupConfig
+            duplicate_tags:
+            - div
+            - p
+            - table
+            non_recursive_classes:
+            - tag
+            navigation_classes:
+            - side_categories
+            - pager
+            ignored_classes:
+            - footer
+            - row header-box
+            - breadcrumb
+            - header container-fluid
+            - icon-star
+            - image_container
           ignore_https_errors: true
       inputs: []
-      segmentation_stages:
-        - stage_name: "web_chunks"
-          splitter_type: "RecursiveCharacterTextSplitter"
-          params:
-            chunk_size: 1200
-            chunk_overlap: 80
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "17C_web_loader_example"
-        collection_name: "17C_web_loader_example"
+      stages: []
     run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
-        top_k: 4
-        search_type: "similarity"
-      requires_session: false
-      query: "domain example"
-      top_k: 3
-      strict_match: false
-    expected_outcome: "success"
-    notes: "Generic website loader variant."
-
-  - example_id: "17_web_loader"
-    source_example_file: "17_web_loader.py"
-    input_mode: "url"
-    input_spec:
-      url: "https://quotes.toscrape.com"
+    retrievals: []
+  - run_name: async
     pipeline_create_payload:
-      name: "17_web_loader_pipeline"
-      description: "Legacy web loader flow."
+      name: 17C_web_loader_example_async
       loader:
-        type: "WebLoader"
+        type: AsyncWebLoader
         params:
           depth: 2
-          output_format: "markdown"
-          fetch_mode: "requests"
-          crawl_scope: "same_host"
+          output_format: markdown
+          fetch_mode: requests
+          crawl_scope: allow_all
+          follow_download_links: false
+          max_concurrency: 4
+          cleanup_config: *id006
+          ignore_https_errors: true
+      inputs: []
+      stages: []
+    run_payload_template: {}
+    retrievals: []
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.
+- example_id: 17_web_loader
+  source_example_file: 17_web_loader.py
+  input_mode: url
+  input_spec:
+    url: https://quotes.toscrape.com
+  runs:
+  - run_name: sync
+    pipeline_create_payload:
+      name: 17_web_loader_sync
+      loader:
+        type: WebLoader
+        params:
+          depth: 2
+          output_format: markdown
+          fetch_mode: requests
+          crawl_scope: same_host
           follow_download_links: false
       inputs: []
-      segmentation_stages:
-        - stage_name: "web_chunks"
-          splitter_type: "RecursiveCharacterTextSplitter"
-          params:
-            chunk_size: 1200
-            chunk_overlap: 80
-          input_aliases: ["LOADING"]
-          position: 0
-      indexing:
-        index_type: "chroma"
-        params:
-          embeddings_provider: "openai"
-          cleanup: true
-          collection_name: "17_web_loader"
-        collection_name: "17_web_loader"
+      stages: []
     run_payload_template: {}
-    retrieval_plan:
-      retriever_type: "create_vector_retriever"
-      retriever_params:
-        top_k: 4
-        search_type: "similarity"
-      requires_session: false
-      query: "life quote"
-      top_k: 3
-      strict_match: false
-    expected_outcome: "success"
-    notes: "Legacy combined sync/async web example approximated as one API pipeline."
+    retrievals: []
+  - run_name: async
+    pipeline_create_payload:
+      name: 17_web_loader_async
+      loader:
+        type: AsyncWebLoader
+        params:
+          depth: 2
+          output_format: markdown
+          fetch_mode: requests_fallback_playwright
+          crawl_scope: same_host
+          follow_download_links: false
+          max_concurrency: 4
+      inputs: []
+      stages: []
+    run_payload_template: {}
+    retrievals: []
+  expected_outcome: success
+  notes: Pipeline-only API example parity with rag-lib.

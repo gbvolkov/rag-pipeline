@@ -56,7 +56,6 @@ class Pipeline(Base):
 
     project: Mapped["Project"] = relationship(back_populates="pipelines")
     inputs: Mapped[list["PipelineInput"]] = relationship(back_populates="pipeline")
-    segmentation_stages: Mapped[list["PipelineSegmentationStage"]] = relationship(back_populates="pipeline")
     indexing_config: Mapped["PipelineIndexingConfig | None"] = relationship(back_populates="pipeline", uselist=False)
 
 
@@ -73,23 +72,6 @@ class PipelineInput(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     pipeline: Mapped["Pipeline"] = relationship(back_populates="inputs")
-
-
-class PipelineSegmentationStage(Base):
-    __tablename__ = "pipeline_segmentation_stages"
-    __table_args__ = (
-        UniqueConstraint("pipeline_id", "stage_name", name="uq_stage_name_per_pipeline"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    pipeline_id: Mapped[str] = mapped_column(ForeignKey("pipelines.id", ondelete="CASCADE"), index=True, nullable=False)
-    stage_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    splitter_type: Mapped[str] = mapped_column(String(128), nullable=False)
-    params: Mapped[dict[str, Any]] = mapped_column(json_type(), nullable=False)
-    input_aliases: Mapped[list[str]] = mapped_column(json_type(), nullable=False)
-    position: Mapped[int] = mapped_column(Integer, nullable=False)
-
-    pipeline: Mapped["Pipeline"] = relationship(back_populates="segmentation_stages")
 
 
 class PipelineIndexingConfig(Base):
@@ -113,7 +95,7 @@ class Job(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     pipeline_id: Mapped[str | None] = mapped_column(ForeignKey("pipelines.id", ondelete="SET NULL"), nullable=True, index=True)
-    kind: Mapped[str] = mapped_column(String(64), nullable=False)  # run_pipeline|reindex|example_conformance
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)  # run_pipeline|reindex
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
     payload: Mapped[dict[str, Any] | None] = mapped_column(json_type(), nullable=True)
@@ -121,12 +103,6 @@ class Job(Base):
     error: Mapped[dict[str, Any] | None] = mapped_column(json_type(), nullable=True)
     canceled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    capability_snapshot_id: Mapped[str | None] = mapped_column(
-        ForeignKey("capabilities_snapshots.id", ondelete="SET NULL"), nullable=True
-    )
-    example_profile_snapshot_id: Mapped[str | None] = mapped_column(
-        ForeignKey("example_profiles.id", ondelete="SET NULL"), nullable=True
-    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -203,7 +179,10 @@ class Retriever(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
-    index_artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=False, index=True)
+    index_artifact_id: Mapped[str | None] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    source_artifact_ids: Mapped[list[str] | None] = mapped_column(json_type(), nullable=True)
     retriever_type: Mapped[str] = mapped_column(String(128), nullable=False)
     params: Mapped[dict[str, Any]] = mapped_column(json_type(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -247,43 +226,3 @@ class RetrievalResultItem(Base):
     segment_payload: Mapped[dict[str, Any]] = mapped_column(json_type(), nullable=False)
 
     result: Mapped["RetrievalResult"] = relationship(back_populates="items")
-
-
-class CapabilitySnapshot(Base):
-    __tablename__ = "capabilities_snapshots"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    rag_lib_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    source_hash: Mapped[str] = mapped_column(String(128), nullable=False)
-    capability_matrix: Mapped[dict[str, Any]] = mapped_column(json_type(), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-
-
-class ExampleProfile(Base):
-    __tablename__ = "example_profiles"
-    __table_args__ = (
-        UniqueConstraint("profile_id", name="uq_example_profile_id"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    profile_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    profile_version: Mapped[str] = mapped_column(String(32), nullable=False, default="v1")
-    family: Mapped[str] = mapped_column(String(128), nullable=False)
-    source_examples: Mapped[list[str]] = mapped_column(json_type(), nullable=False)
-    spec: Mapped[dict[str, Any]] = mapped_column(json_type(), nullable=False)
-    support_status: Mapped[str] = mapped_column(String(32), nullable=False, default="declared")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
-
-
-class ExampleConformanceRun(Base):
-    __tablename__ = "example_conformance_runs"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    profile_id: Mapped[str] = mapped_column(ForeignKey("example_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
-    job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
-    report: Mapped[dict[str, Any] | None] = mapped_column(json_type(), nullable=True)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

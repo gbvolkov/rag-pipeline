@@ -11,20 +11,3 @@ class CapabilityMatrixOut(BaseModel):
     source_hash: str
     generated_at: datetime
     matrix: dict[str, Any]
-
-
-class ExampleCapabilityItem(BaseModel):
-    example_path: str
-    profile_id: str
-    family: str
-    support_status: str
-    implemented: bool
-    notes: str | None = None
-
-
-class ExampleCapabilityMatrixOut(BaseModel):
-    generated_at: datetime
-    total_examples: int
-    covered_examples: int
-    items: list[ExampleCapabilityItem]
-

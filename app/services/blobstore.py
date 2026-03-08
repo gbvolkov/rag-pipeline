@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import boto3
+from botocore.exceptions import ClientError
 
 from app.core.config import get_settings
 
@@ -49,7 +50,12 @@ class MinioBlobStore(BlobStore):
         )
         try:
             self._client.head_bucket(Bucket=self.bucket)
-        except Exception:
+        except ClientError as exc:
+            error = exc.response.get("Error", {})
+            code = str(error.get("Code", "")).strip()
+            status = str(exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", "")).strip()
+            if code not in {"404", "NoSuchBucket", "NotFound"} and status != "404":
+                raise
             self._client.create_bucket(Bucket=self.bucket)
 
     def put_bytes(self, key: str, payload: bytes, content_type: str = "application/octet-stream") -> str:
@@ -81,4 +87,3 @@ def build_blob_store() -> BlobStore:
         )
     settings.local_blob_root.mkdir(parents=True, exist_ok=True)
     return FilesystemBlobStore(root=settings.local_blob_root)
-

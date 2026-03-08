@@ -9,8 +9,6 @@ x-app-env: &app-env
   MINIO_SECRET_KEY: minioadmin
   MINIO_SECURE: "false"
   MINIO_BUCKET: rag-artifacts
-  RAG_LIB_SOURCE_DIR: /opt/rag-lib/src/rag_lib
-  RAG_LIB_EXAMPLES_DIR: /opt/rag-lib/examples
 
 services:
   rag-pipeline:
@@ -32,7 +30,6 @@ services:
       - "8007:8007"
     volumes:
       - rag_blob_data:/data/blobstore
-      - ../rag-lib:/opt/rag-lib:ro
     restart: unless-stopped
 
   rag-worker:
@@ -64,7 +61,6 @@ services:
         condition: service_completed_successfully
     volumes:
       - rag_blob_data:/data/blobstore
-      - ../rag-lib:/opt/rag-lib:ro
     restart: unless-stopped
 
   postgres:

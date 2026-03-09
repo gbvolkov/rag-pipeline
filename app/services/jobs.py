@@ -10,7 +10,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.errors import ConflictError, NotFoundError, ServiceUnavailableError, UnprocessableError
+from app.core.errors import APIError, ConflictError, NotFoundError, ServiceUnavailableError, UnprocessableError
 from app.models.entities import (
     Artifact,
     ArtifactInput,
@@ -24,14 +24,19 @@ from app.models.entities import (
     RetrieverSession,
     RetrievalResult,
     RetrievalResultItem,
+    new_id,
 )
 from app.services.artifacts import create_artifact
+from app.services.pipeline_validator import validate_indexing_params
 from app.services.rag_adapter import (
+    INDEX_RUNTIME_REGISTRY,
+    RETRIEVER_RUNTIME_REGISTRY,
     build_index,
     create_retriever_runtime,
     execute_retriever_query,
     init_retriever_session,
     release_retriever_session,
+    restore_index_runtime,
     run_loader,
     run_processor,
     run_splitter,
@@ -57,6 +62,12 @@ class StageOutput:
 
 def _now() -> datetime:
     return datetime.now(tz=UTC)
+
+
+def _error_message(exc: Exception) -> str:
+    if isinstance(exc, APIError):
+        return exc.message
+    return str(exc)
 
 
 def create_job(
@@ -215,6 +226,27 @@ def _artifact_to_document_payload(artifact: Artifact) -> dict[str, Any]:
     return payload
 
 
+def _normalize_segment_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    data = dict(payload)
+    metadata = data.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise UnprocessableError("Segment payload field 'metadata' must be an object")
+    metadata = dict(metadata)
+
+    segment_id = data.get("segment_id", metadata.get("segment_id"))
+    parent_id = data.get("parent_id", metadata.get("parent_id"))
+    if segment_id is not None:
+        segment_id = str(segment_id)
+        data["segment_id"] = segment_id
+        metadata.setdefault("segment_id", segment_id)
+    if parent_id is not None:
+        parent_id = str(parent_id)
+        data["parent_id"] = parent_id
+        metadata.setdefault("parent_id", parent_id)
+    data["metadata"] = metadata
+    return data
+
+
 def _artifact_to_segment_payload(artifact: Artifact) -> dict[str, Any]:
     if not isinstance(artifact.content_json, dict):
         raise UnprocessableError(
@@ -232,7 +264,11 @@ def _artifact_to_segment_payload(artifact: Artifact) -> dict[str, Any]:
             "Segment artifact payload is missing 'metadata'",
             details={"artifact_id": artifact.id},
         )
-    return data
+    return _normalize_segment_payload(data)
+
+
+def _artifact_to_graph_entity_payload(artifact: Artifact) -> dict[str, Any]:
+    return _artifact_to_segment_payload(artifact)
 
 
 def _is_dual_storage_index(index_type: str, params: dict[str, Any] | None) -> bool:
@@ -381,6 +417,32 @@ def _cleanup_uploaded_file(run_payload: dict[str, Any]) -> None:
         logger.warning("Failed to clean up uploaded file path: %s", uploaded_file_path, exc_info=True)
 
 
+def _index_storage_columns(index_payload: dict[str, Any]) -> dict[str, str | None]:
+    storage = index_payload.get("storage")
+    if not isinstance(storage, dict):
+        return {
+            "storage_backend": None,
+            "vector_collection_name": None,
+            "vector_persist_path": None,
+            "docstore_persist_path": None,
+        }
+
+    vector_store = storage.get("vector_store")
+    vector_store = vector_store if isinstance(vector_store, dict) else {}
+    doc_store = storage.get("doc_store")
+    doc_store = doc_store if isinstance(doc_store, dict) else {}
+    return {
+        "storage_backend": storage.get("backend") if isinstance(storage.get("backend"), str) else None,
+        "vector_collection_name": (
+            vector_store.get("collection_name") if isinstance(vector_store.get("collection_name"), str) else None
+        ),
+        "vector_persist_path": (
+            vector_store.get("persist_path") if isinstance(vector_store.get("persist_path"), str) else None
+        ),
+        "docstore_persist_path": doc_store.get("file_path") if isinstance(doc_store.get("file_path"), str) else None,
+    }
+
+
 def _persist_documents(
     db: Session,
     *,
@@ -423,7 +485,8 @@ def _persist_segments(
     input_artifact_ids: list[str],
 ) -> StageOutput:
     artifact_ids: list[str] = []
-    for idx, seg in enumerate(segments):
+    normalized_segments = [_normalize_segment_payload(seg) for seg in segments]
+    for idx, seg in enumerate(normalized_segments):
         artifact = create_artifact(
             db,
             project_id=project_id,
@@ -439,30 +502,68 @@ def _persist_segments(
         )
         artifact_ids.append(artifact.id)
     db.commit()
-    return StageOutput(kind="segment", payload=segments, artifact_ids=artifact_ids)
+    return StageOutput(kind="segment", payload=normalized_segments, artifact_ids=artifact_ids)
 
 
-def _persist_index(
+def _persist_graph_entities(
     db: Session,
     *,
     project_id: str,
     pipeline_id: str,
     job_id: str,
     stage_name: str,
+    graph_entities: list[dict[str, Any]],
+    input_artifact_ids: list[str],
+) -> StageOutput:
+    artifact_ids: list[str] = []
+    normalized_entities = [_normalize_segment_payload(entity) for entity in graph_entities]
+    for idx, entity in enumerate(normalized_entities):
+        artifact = create_artifact(
+            db,
+            project_id=project_id,
+            pipeline_id=pipeline_id,
+            job_id=job_id,
+            artifact_kind="graph_entity",
+            stage_name=stage_name,
+            artifact_key=f"graph_entity_{idx}",
+            content_text=entity.get("content", ""),
+            content_json=entity,
+            metadata_json=entity.get("metadata") or {},
+            input_artifact_ids=input_artifact_ids,
+        )
+        artifact_ids.append(artifact.id)
+    db.commit()
+    return StageOutput(kind="graph_entity", payload=normalized_entities, artifact_ids=artifact_ids)
+
+
+def _persist_index(
+    db: Session,
+    *,
+    artifact_id: str,
+    project_id: str,
+    pipeline_id: str | None,
+    job_id: str | None,
+    stage_name: str,
     index_payload: dict[str, Any],
     input_artifact_ids: list[str],
 ) -> Artifact:
+    storage_columns = _index_storage_columns(index_payload)
     artifact = create_artifact(
         db,
+        artifact_id=artifact_id,
         project_id=project_id,
         pipeline_id=pipeline_id,
         job_id=job_id,
         artifact_kind="index",
         stage_name=stage_name,
-        artifact_key=index_payload.get("collection_name", "index"),
+        artifact_key=index_payload.get("logical_collection_name") or "index",
         content_text=None,
         content_json=index_payload,
         metadata_json=index_payload,
+        storage_backend=storage_columns["storage_backend"],
+        vector_collection_name=storage_columns["vector_collection_name"],
+        vector_persist_path=storage_columns["vector_persist_path"],
+        docstore_persist_path=storage_columns["docstore_persist_path"],
         input_artifact_ids=input_artifact_ids,
     )
     db.commit()
@@ -494,7 +595,7 @@ def run_pipeline_job(db: Session, job_id: str) -> Job:
     run_payload = job.payload or {}
 
     outputs: dict[str, StageOutput] = {}
-    artifacts_produced = {"document": 0, "segment": 0, "index": 0}
+    artifacts_produced = {"document": 0, "segment": 0, "graph_entity": 0, "index": 0}
     stage_diagnostics: dict[str, Any] = {}
 
     try:
@@ -545,6 +646,10 @@ def run_pipeline_job(db: Session, job_id: str) -> Job:
                 raise UnprocessableError(
                     f"Run payload must include '{payload_key}' as a list for runtime_input pipelines",
                 )
+            if not runtime_payload:
+                raise UnprocessableError(
+                    f"Run payload '{payload_key}' must be a non-empty list for runtime_input pipelines",
+                )
             if artifact_kind == "document":
                 persisted = _persist_documents(
                     db,
@@ -590,6 +695,12 @@ def run_pipeline_job(db: Session, job_id: str) -> Job:
                 params=loader_cfg.get("params", {}),
                 run_payload=run_payload,
             )
+            if not loader_result["payload"]:
+                raise ServiceUnavailableError(
+                    message=f"Loader '{loader_type}' returned no documents",
+                    details={"loader_type": loader_type},
+                    rag_lib_exception_type="SilentEmptyResult",
+                )
             inherited_artifact_ids = [aid for out in outputs.values() for aid in out.artifact_ids]
             persisted = _persist_documents(
                 db,
@@ -715,6 +826,45 @@ def run_pipeline_job(db: Session, job_id: str) -> Job:
                 )
                 artifacts_produced["segment"] += len(stage_result["payload"])
             elif stage_result["kind"] == "none":
+                persisted_artifacts = stage_result.get("persisted_artifacts")
+                if persisted_artifacts is None:
+                    persisted_artifacts = []
+                if not isinstance(persisted_artifacts, list):
+                    raise UnprocessableError(
+                        f"Stage '{stage_name}' returned invalid persisted_artifacts payload",
+                        details={"stage_name": stage_name, "stage_kind": stage_kind},
+                    )
+                for persisted_artifact in persisted_artifacts:
+                    if not isinstance(persisted_artifact, dict):
+                        raise UnprocessableError(
+                            f"Stage '{stage_name}' returned invalid persisted artifact entry",
+                            details={"stage_name": stage_name, "stage_kind": stage_kind},
+                        )
+                    artifact_kind = persisted_artifact.get("artifact_kind")
+                    artifact_payload = persisted_artifact.get("payload")
+                    if not isinstance(artifact_payload, list):
+                        raise UnprocessableError(
+                            f"Stage '{stage_name}' returned invalid persisted payload for '{artifact_kind}'",
+                            details={"stage_name": stage_name, "stage_kind": stage_kind},
+                        )
+                    if not artifact_payload:
+                        continue
+                    if artifact_kind == "graph_entity":
+                        _persist_graph_entities(
+                            db,
+                            project_id=job.project_id,
+                            pipeline_id=pipeline.id,
+                            job_id=job.id,
+                            stage_name=stage_name,
+                            graph_entities=artifact_payload,
+                            input_artifact_ids=source_artifact_ids,
+                        )
+                        artifacts_produced["graph_entity"] += len(artifact_payload)
+                        continue
+                    raise UnprocessableError(
+                        f"Stage '{stage_name}' returned unsupported persisted artifact kind '{artifact_kind}'",
+                        details={"stage_name": stage_name, "stage_kind": stage_kind},
+                    )
                 persisted = StageOutput(
                     kind="none",
                     payload=[],
@@ -725,6 +875,17 @@ def run_pipeline_job(db: Session, job_id: str) -> Job:
             else:
                 raise UnprocessableError(
                     f"Stage '{stage_name}' returned unsupported artifact kind '{stage_result['kind']}'",
+                )
+
+            if stage_result["kind"] in {"document", "segment"} and not stage_result["payload"]:
+                raise ServiceUnavailableError(
+                    message=f"Pipeline stage '{stage_name}' returned an empty {stage_result['kind']} payload",
+                    details={
+                        "stage_name": stage_name,
+                        "stage_kind": stage_kind,
+                        "component_type": component_type,
+                    },
+                    rag_lib_exception_type="SilentEmptyResult",
                 )
 
             outputs[stage_name] = StageOutput(
@@ -772,6 +933,12 @@ def run_pipeline_job(db: Session, job_id: str) -> Job:
                     runtime_extras=runtime_extras,
                     diagnostics={},
                 )
+            if not index_source.payload:
+                raise ServiceUnavailableError(
+                    message="Indexing received an empty segment payload",
+                    details={"pipeline_id": pipeline.id, "index_type": indexing_row.index_type},
+                    rag_lib_exception_type="SilentEmptyResult",
+                )
 
             if indexing_row.params is None:
                 index_params: dict[str, Any] = {}
@@ -782,6 +949,11 @@ def run_pipeline_job(db: Session, job_id: str) -> Job:
                     "Pipeline indexing params must be an object",
                     details={"pipeline_id": pipeline.id, "index_type": indexing_row.index_type},
                 )
+            validate_indexing_params(
+                indexing_row.index_type,
+                index_params,
+                path=f"indexing.{indexing_row.index_type}.params",
+            )
             parent_segments: list[dict[str, Any]] = []
             parent_artifact_ids: list[str] = []
             if _is_dual_storage_index(indexing_row.index_type, index_params):
@@ -798,19 +970,23 @@ def run_pipeline_job(db: Session, job_id: str) -> Job:
                         pipeline_id=pipeline.id,
                     )
 
+            index_artifact_id = new_id()
             index_payload = build_index(
-                index_artifact_id=f"{job.id}:{pipeline.id}:{indexing_row.index_type}",
+                index_artifact_id=index_artifact_id,
                 index_type=indexing_row.index_type,
                 params=index_params,
                 raw_segments=index_source.payload,
                 raw_parent_segments=parent_segments if parent_segments else None,
                 runtime_extras=index_source.runtime_extras,
+                logical_collection_name=indexing_row.collection_name,
+                logical_docstore_name=indexing_row.docstore_name,
             )
             index_input_artifact_ids = _dedupe_preserve_order(
                 list(index_source.artifact_ids) + list(parent_artifact_ids)
             )
             index_artifact = _persist_index(
                 db,
+                artifact_id=index_artifact_id,
                 project_id=job.project_id,
                 pipeline_id=pipeline.id,
                 job_id=job.id,
@@ -819,12 +995,6 @@ def run_pipeline_job(db: Session, job_id: str) -> Job:
                 input_artifact_ids=index_input_artifact_ids,
             )
             artifacts_produced["index"] += 1
-            # Re-bind runtime index ID to persisted artifact ID.
-            from app.services.rag_adapter import INDEX_RUNTIME_REGISTRY
-
-            key = f"{job.id}:{pipeline.id}:{indexing_row.index_type}"
-            if key in INDEX_RUNTIME_REGISTRY:
-                INDEX_RUNTIME_REGISTRY[index_artifact.id] = INDEX_RUNTIME_REGISTRY.pop(key)
 
         job.result = {
             "artifacts_produced": artifacts_produced,
@@ -840,7 +1010,7 @@ def run_pipeline_job(db: Session, job_id: str) -> Job:
         return job
     except Exception as exc:
         error_payload = {
-            "message": str(exc),
+            "message": _error_message(exc),
             "type": type(exc).__name__,
         }
         rag_type = getattr(exc, "rag_lib_exception_type", None)
@@ -899,6 +1069,11 @@ def run_reindex_job(db: Session, job_id: str) -> Job:
         index_params = {}
     if not isinstance(index_params, dict):
         raise UnprocessableError("Reindex payload indexing.params must be an object")
+    validate_indexing_params(
+        index_type,
+        index_params,
+        path=f"indexing.{index_type}.params",
+    )
     parent_segments: list[dict[str, Any]] = []
     if _is_dual_storage_index(index_type, index_params):
         source_pipeline_ids = {a.pipeline_id for a in source_artifacts if a.pipeline_id}
@@ -910,15 +1085,19 @@ def run_reindex_job(db: Session, job_id: str) -> Job:
             pipeline_id=pipeline_scope,
         )
 
+    index_artifact_id = new_id()
     index_payload = build_index(
-        index_artifact_id=f"reindex:{job.id}:{index_type}",
+        index_artifact_id=index_artifact_id,
         index_type=index_type,
         params=index_params,
         raw_segments=raw_segments,
         raw_parent_segments=parent_segments if parent_segments else None,
+        logical_collection_name=index_cfg.get("collection_name"),
+        logical_docstore_name=index_cfg.get("docstore_name"),
     )
     artifact = _persist_index(
         db,
+        artifact_id=index_artifact_id,
         project_id=job.project_id,
         pipeline_id=None,
         job_id=job.id,
@@ -926,11 +1105,6 @@ def run_reindex_job(db: Session, job_id: str) -> Job:
         index_payload=index_payload,
         input_artifact_ids=[a.id for a in source_artifacts],
     )
-    from app.services.rag_adapter import INDEX_RUNTIME_REGISTRY
-
-    key = f"reindex:{job.id}:{index_type}"
-    if key in INDEX_RUNTIME_REGISTRY:
-        INDEX_RUNTIME_REGISTRY[artifact.id] = INDEX_RUNTIME_REGISTRY.pop(key)
 
     job.result = {"index_artifact_id": artifact.id}
     db.add(job)
@@ -959,14 +1133,16 @@ def _resolve_retriever_source_payloads(
         ordered_rows.append(row)
 
     kinds = {row.artifact_kind for row in ordered_rows}
-    if kinds - {"document", "segment"}:
-        raise UnprocessableError("Retriever source artifacts must be document or segment artifacts only")
+    if kinds - {"document", "segment", "graph_entity"}:
+        raise UnprocessableError("Retriever source artifacts must be document, segment, or graph_entity artifacts only")
     if len(kinds) != 1:
         raise UnprocessableError("Retriever source artifacts must be homogeneous")
 
     artifact_kind = next(iter(kinds))
     if artifact_kind == "document":
         return artifact_kind, [_artifact_to_document_payload(row) for row in ordered_rows]
+    if artifact_kind == "graph_entity":
+        return artifact_kind, [_artifact_to_graph_entity_payload(row) for row in ordered_rows]
     return artifact_kind, [_artifact_to_segment_payload(row) for row in ordered_rows]
 
 
@@ -983,6 +1159,138 @@ def _relevant_retriever_source_artifact_ids(db: Session, retriever: Retriever) -
         .order_by(ArtifactInput.created_at.asc())
     ).all()
     return [str(row[0]) for row in rows if row and row[0] is not None]
+
+
+def _load_index_input_payloads(db: Session, index_artifact: Artifact) -> list[dict[str, Any]]:
+    rows = db.execute(
+        select(Artifact)
+        .join(ArtifactInput, ArtifactInput.input_artifact_id == Artifact.id)
+        .where(ArtifactInput.artifact_id == index_artifact.id)
+        .order_by(ArtifactInput.created_at.asc())
+    ).scalars().all()
+
+    payloads: list[dict[str, Any]] = []
+    for row in rows:
+        if row.project_id != index_artifact.project_id or row.artifact_kind != "segment":
+            continue
+        payloads.append(_artifact_to_segment_payload(row))
+    return payloads
+
+
+def _resolve_index_runtime_params(
+    db: Session,
+    index_artifact: Artifact,
+) -> tuple[str, dict[str, Any], dict[str, Any], str | None, str | None]:
+    _ = db
+    payload = index_artifact.content_json if isinstance(index_artifact.content_json, dict) else {}
+    index_type = payload.get("index_type")
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else None
+    storage = payload.get("storage") if isinstance(payload.get("storage"), dict) else None
+    logical_collection_name = (
+        payload.get("logical_collection_name") if isinstance(payload.get("logical_collection_name"), str) else None
+    )
+    logical_docstore_name = (
+        payload.get("logical_docstore_name") if isinstance(payload.get("logical_docstore_name"), str) else None
+    )
+
+    if not isinstance(index_type, str) or not index_type.strip():
+        raise UnprocessableError(
+            "Index runtime cannot be rehydrated because the index type is unavailable",
+            details={"index_artifact_id": index_artifact.id},
+        )
+
+    if params is None:
+        raise UnprocessableError(
+            "Index runtime cannot be rehydrated because indexing params are unavailable",
+            details={"index_artifact_id": index_artifact.id},
+        )
+
+    if storage is None:
+        raise UnprocessableError(
+            "Index runtime cannot be rehydrated because the index artifact has no persisted storage descriptor",
+            details={
+                "index_artifact_id": index_artifact.id,
+                "required_action": "recreate the index after resetting the database and Docker volumes",
+            },
+        )
+
+    return index_type, dict(params), storage, logical_collection_name, logical_docstore_name
+
+
+def _ensure_index_runtime(db: Session, index_artifact: Artifact) -> None:
+    if index_artifact.id in INDEX_RUNTIME_REGISTRY:
+        return
+
+    index_type, params, storage, logical_collection_name, logical_docstore_name = _resolve_index_runtime_params(
+        db,
+        index_artifact,
+    )
+    payloads = _load_index_input_payloads(db, index_artifact)
+    if not payloads:
+        raise ServiceUnavailableError(
+            message="Index runtime cannot be restored because no source segments were recovered from artifact lineage",
+            details={"index_artifact_id": index_artifact.id},
+            rag_lib_exception_type="SilentEmptyResult",
+        )
+    raw_segments = payloads
+    raw_parent_segments: list[dict[str, Any]] = []
+    if _is_dual_storage_index(index_type, params):
+        raw_segments, raw_parent_segments = _partition_dual_storage_segments(payloads)
+    if not raw_segments:
+        raise ServiceUnavailableError(
+            message="Index runtime cannot be restored because no child segments were recovered from artifact lineage",
+            details={"index_artifact_id": index_artifact.id, "index_type": index_type},
+            rag_lib_exception_type="SilentEmptyResult",
+        )
+
+    restore_index_runtime(
+        index_artifact_id=index_artifact.id,
+        index_type=index_type,
+        params=params,
+        raw_segments=raw_segments,
+        raw_parent_segments=raw_parent_segments or None,
+        logical_collection_name=logical_collection_name,
+        logical_docstore_name=logical_docstore_name,
+        storage=storage,
+    )
+
+
+def _ensure_retriever_runtime(db: Session, retriever: Retriever) -> None:
+    if retriever.id in RETRIEVER_RUNTIME_REGISTRY:
+        return
+
+    project = db.get(Project, retriever.project_id)
+    if project is None:
+        raise NotFoundError("Project not found")
+    source_artifact_kind: str | None = None
+    source_payloads: list[dict[str, Any]] | None = None
+    if retriever.index_artifact_id is not None:
+        index_artifact = db.get(Artifact, retriever.index_artifact_id)
+        if index_artifact is None or index_artifact.project_id != retriever.project_id or index_artifact.artifact_kind != "index":
+            raise NotFoundError("Index artifact not found")
+        _ensure_index_runtime(db, index_artifact)
+    elif retriever.source_artifact_ids:
+        source_artifact_kind, source_payloads = _resolve_retriever_source_payloads(
+            db,
+            project_id=retriever.project_id,
+            source_artifact_ids=list(retriever.source_artifact_ids),
+        )
+        if not source_payloads:
+            raise ServiceUnavailableError(
+                message="Retriever runtime cannot be created because no source payloads were resolved",
+                details={"retriever_id": retriever.id},
+                rag_lib_exception_type="SilentEmptyResult",
+            )
+
+    create_retriever_runtime(
+        retriever_id=retriever.id,
+        retriever_type=retriever.retriever_type,
+        index_artifact_id=retriever.index_artifact_id,
+        params=retriever.params,
+        source_payloads=source_payloads,
+        source_artifact_kind=source_artifact_kind,
+        project_graph_store_config=project.graph_store_config,
+    )
 
 
 def _artifact_segment_id(row: Artifact) -> str | None:
@@ -1004,7 +1312,6 @@ def _resolve_retriever_artifact_lookup(db: Session, project_id: str, retriever: 
     rows = db.execute(
         select(Artifact).where(
             Artifact.project_id == project_id,
-            Artifact.artifact_kind == "segment",
             Artifact.id.in_(relevant_ids),
         )
     ).scalars().all()
@@ -1013,7 +1320,7 @@ def _resolve_retriever_artifact_lookup(db: Session, project_id: str, retriever: 
     lookup: dict[str, str] = {}
     for artifact_id in relevant_ids:
         row = row_by_id.get(artifact_id)
-        if row is None:
+        if row is None or row.artifact_kind not in {"segment", "graph_entity"}:
             continue
         segment_id = _artifact_segment_id(row)
         if segment_id is None or segment_id in lookup:
@@ -1034,16 +1341,17 @@ def create_retriever(
     if (index_artifact_id is None) == (not source_artifact_ids):
         raise UnprocessableError("Provide exactly one of index_artifact_id or source_artifact_ids")
 
+    project = db.get(Project, project_id)
+    if project is None:
+        raise NotFoundError("Project not found")
     index_artifact: Artifact | None = None
     resolved_source_artifact_ids = list(source_artifact_ids or [])
-    source_artifact_kind: str | None = None
-    source_payloads: list[dict[str, Any]] | None = None
     if index_artifact_id is not None:
         index_artifact = db.get(Artifact, index_artifact_id)
         if index_artifact is None or index_artifact.project_id != project_id or index_artifact.artifact_kind != "index":
             raise NotFoundError("Index artifact not found")
     else:
-        source_artifact_kind, source_payloads = _resolve_retriever_source_payloads(
+        _resolve_retriever_source_payloads(
             db,
             project_id=project_id,
             source_artifact_ids=resolved_source_artifact_ids,
@@ -1053,14 +1361,6 @@ def create_retriever(
         validate_runtime_object_specs(params, path=f"retriever.{retriever_type}.params")
     except RuntimeObjectError as exc:
         raise UnprocessableError(str(exc)) from exc
-    if index_artifact is not None:
-        from app.services.rag_adapter import INDEX_RUNTIME_REGISTRY
-
-        if index_artifact.id not in INDEX_RUNTIME_REGISTRY:
-            raise UnprocessableError(
-                "Index runtime is not available in the current API process; rerun indexing before creating the retriever",
-                details={"index_artifact_id": index_artifact.id},
-            )
 
     row = Retriever(
         project_id=project_id,
@@ -1072,14 +1372,9 @@ def create_retriever(
     db.add(row)
     db.flush()
     try:
-        create_retriever_runtime(
-            retriever_id=row.id,
-            retriever_type=retriever_type,
-            index_artifact_id=index_artifact_id,
-            params=params,
-            source_payloads=source_payloads,
-            source_artifact_kind=source_artifact_kind,
-        )
+        if index_artifact is not None:
+            _ensure_index_runtime(db, index_artifact)
+        _ensure_retriever_runtime(db, row)
     except Exception:
         db.rollback()
         raise
@@ -1089,6 +1384,7 @@ def create_retriever(
 
 
 def init_session(db: Session, retriever: Retriever) -> RetrieverSession:
+    _ensure_retriever_runtime(db, retriever)
     settings = get_settings()
     active_count = db.execute(
         select(func.count(RetrieverSession.id)).where(
@@ -1136,6 +1432,7 @@ def query_retriever(
     query_text: str,
     session_id: str | None,
 ) -> RetrievalResult:
+    _ensure_retriever_runtime(db, retriever)
     scored = execute_retriever_query(
         retriever_id=retriever.id,
         query=query_text,

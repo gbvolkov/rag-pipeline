@@ -45,6 +45,7 @@ class PipelineExampleSpec:
     runs: list[PipelineRunSpec]
     expected_outcome: str
     notes: str
+    project_create_payload: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -199,6 +200,7 @@ def load_manifest(manifest_path: Path) -> PipelineExampleManifest:
                 source_example_file=_as_str(_require(raw, "source_example_file"), "source_example_file"),
                 input_mode=input_mode,
                 input_spec=_as_dict(_require(raw, "input_spec"), "input_spec"),
+                project_create_payload=_as_dict(raw.get("project_create_payload", {}), "project_create_payload"),
                 runs=_parse_runs(raw, example_id),
                 expected_outcome=expected_outcome,
                 notes=_as_str(_require(raw, "notes"), "notes"),

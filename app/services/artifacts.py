@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
-from app.models.entities import Artifact, ArtifactInput
+from app.models.entities import Artifact, ArtifactInput, new_id
 
 
 def next_artifact_version(
@@ -33,6 +33,7 @@ def next_artifact_version(
 def create_artifact(
     db: Session,
     *,
+    artifact_id: str | None = None,
     project_id: str,
     pipeline_id: str | None,
     job_id: str | None,
@@ -44,6 +45,10 @@ def create_artifact(
     content_json: dict[str, Any] | None = None,
     blob_uri: str | None = None,
     metadata_json: dict[str, Any] | None = None,
+    storage_backend: str | None = None,
+    vector_collection_name: str | None = None,
+    vector_persist_path: str | None = None,
+    docstore_persist_path: str | None = None,
     input_artifact_ids: list[str] | None = None,
 ) -> Artifact:
     version = next_artifact_version(
@@ -56,6 +61,7 @@ def create_artifact(
     )
 
     artifact = Artifact(
+        id=artifact_id or new_id(),
         project_id=project_id,
         pipeline_id=pipeline_id,
         job_id=job_id,
@@ -68,6 +74,10 @@ def create_artifact(
         content_json=content_json,
         blob_uri=blob_uri,
         metadata_json=metadata_json,
+        storage_backend=storage_backend,
+        vector_collection_name=vector_collection_name,
+        vector_persist_path=vector_persist_path,
+        docstore_persist_path=docstore_persist_path,
     )
     db.add(artifact)
     db.flush()
@@ -134,4 +144,3 @@ def artifact_versions(db: Session, artifact: Artifact) -> list[Artifact]:
             Artifact.artifact_key == artifact.artifact_key,
         ).order_by(Artifact.version.desc())
     ).scalars().all()
-

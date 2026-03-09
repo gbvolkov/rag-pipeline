@@ -142,7 +142,9 @@ class Artifact(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     pipeline_id: Mapped[str | None] = mapped_column(ForeignKey("pipelines.id", ondelete="SET NULL"), nullable=True, index=True)
     job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
-    artifact_kind: Mapped[str] = mapped_column(String(64), nullable=False)  # document|segment|index|retrieval_result
+    artifact_kind: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )  # document|segment|graph_entity|index|retrieval_result
     stage_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     artifact_key: Mapped[str] = mapped_column(String(255), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -151,6 +153,10 @@ class Artifact(Base):
     content_json: Mapped[dict[str, Any] | None] = mapped_column(json_type(), nullable=True)
     blob_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(json_type(), nullable=True)
+    storage_backend: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    vector_collection_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    vector_persist_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    docstore_persist_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     inputs: Mapped[list["ArtifactInput"]] = relationship(

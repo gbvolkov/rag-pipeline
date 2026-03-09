@@ -28,6 +28,10 @@ def stage(
     }
 
 
+def regex_hierarchy_pattern(level: int, pattern: str) -> dict[str, object]:
+    return {"level": level, "pattern": pattern}
+
+
 def retrieval(
     name: str,
     *,
@@ -62,6 +66,23 @@ def query(name: str, query_text: str, top_k: int, *, strict_match: bool) -> dict
     }
 
 
+def _normalize_pipeline_create_payload(payload: dict) -> dict:
+    normalized = dict(payload)
+    indexing = normalized.get("indexing")
+    if not isinstance(indexing, dict):
+        return normalized
+
+    indexing_copy = dict(indexing)
+    params = indexing_copy.get("params")
+    if isinstance(params, dict) and str(indexing_copy.get("index_type", "")).strip().lower() == "chroma":
+        params_copy = dict(params)
+        params_copy.pop("collection_name", None)
+        params_copy.pop("doc_store_path", None)
+        indexing_copy["params"] = params_copy
+    normalized["indexing"] = indexing_copy
+    return normalized
+
+
 def run(
     run_name: str,
     pipeline_create_payload: dict,
@@ -71,7 +92,7 @@ def run(
 ) -> dict:
     return {
         "run_name": run_name,
-        "pipeline_create_payload": pipeline_create_payload,
+        "pipeline_create_payload": _normalize_pipeline_create_payload(pipeline_create_payload),
         "run_payload_template": run_payload_template or {},
         "retrievals": retrievals or [],
     }
@@ -83,6 +104,7 @@ def example(
     *,
     input_mode: str,
     input_spec: dict,
+    project_create_payload: dict | None = None,
     runs: list[dict],
     expected_outcome: str = "success",
     notes: str = "",
@@ -92,6 +114,7 @@ def example(
         "source_example_file": source_example_file,
         "input_mode": input_mode,
         "input_spec": input_spec,
+        "project_create_payload": project_create_payload or {},
         "runs": runs,
         "expected_outcome": expected_outcome,
         "notes": notes,
@@ -111,6 +134,23 @@ EMBEDDINGS_SMALL = factory(
     model_name="text-embedding-3-small",
 )
 TABLE_SUMMARIZER = factory("LLMTableSummarizer", llm=LLM_NANO)
+NEO4J_GRAPH_STORE_CONFIG = {
+    "provider": "neo4j",
+    "params": {
+        "uri": "bolt://neo4j:7687",
+        "username": "neo4j",
+        "password": "neo4j_password",
+        "database": "neo4j",
+    },
+}
+NEO4J_GRAPH_STORE = factory(
+    "create_graph_store",
+    provider="neo4j",
+    uri="bolt://neo4j:7687",
+    username="neo4j",
+    password="neo4j_password",
+    database="neo4j",
+)
 
 COMMON_NOTES = "Pipeline-only API example parity with rag-lib."
 
@@ -408,10 +448,10 @@ EXAMPLES = [
                             input_aliases=["LOADING"],
                             params={
                                 "patterns": [
-                                    [1, r"^\s*#\s+(.+)$"],
-                                    [2, r"^\s*##\s+(.+)$"],
-                                    [3, r"^\s*###\s+(.+)$"],
-                                    [1, r"^\s*\*\*(.+?)\*\*\s*$"],
+                                    regex_hierarchy_pattern(1, r"^\s*#\s+(.+)$"),
+                                    regex_hierarchy_pattern(2, r"^\s*##\s+(.+)$"),
+                                    regex_hierarchy_pattern(3, r"^\s*###\s+(.+)$"),
+                                    regex_hierarchy_pattern(1, r"^\s*\*\*(.+?)\*\*\s*$"),
                                 ],
                                 "exclude_patterns": [r"^\s*\d+\s*$"],
                                 "include_parent_content": False,
@@ -533,6 +573,7 @@ EXAMPLES = [
         "05_docx_graph.py",
         input_mode="file",
         input_spec={"file": "Параметризованные задачи.docx"},
+        project_create_payload={"graph_store_config": NEO4J_GRAPH_STORE_CONFIG},
         runs=[
             run(
                 "main",
@@ -549,10 +590,10 @@ EXAMPLES = [
                             input_aliases=["LOADING"],
                             params={
                                 "patterns": [
-                                    [1, r"^\s*#\s+(.+)$"],
-                                    [2, r"^\s*##\s+(.+)$"],
-                                    [3, r"^\s*###\s+(.+)$"],
-                                    [4, r"^\s*####\s+(.+)$"],
+                                    regex_hierarchy_pattern(1, r"^\s*#\s+(.+)$"),
+                                    regex_hierarchy_pattern(2, r"^\s*##\s+(.+)$"),
+                                    regex_hierarchy_pattern(3, r"^\s*###\s+(.+)$"),
+                                    regex_hierarchy_pattern(4, r"^\s*####\s+(.+)$"),
                                 ],
                                 "exclude_patterns": [r"^\s*$"],
                                 "include_parent_content": False,
@@ -564,7 +605,7 @@ EXAMPLES = [
                             "EntityExtractor",
                             1,
                             input_aliases=["docx_structure"],
-                            params={"llm": LLM_NANO, "store": factory("NetworkXGraphStore")},
+                            params={"llm": LLM_NANO, "store": NEO4J_GRAPH_STORE},
                         ),
                     ],
                     "indexing": {
@@ -583,6 +624,7 @@ EXAMPLES = [
                         source_kind="index",
                         retriever_type="GraphRetriever",
                         params={
+                            "llm": LLM_NANO,
                             "config": factory(
                                 "GraphQueryConfig",
                                 mode="local",
@@ -608,6 +650,7 @@ EXAMPLES = [
                         source_kind="index",
                         retriever_type="GraphRetriever",
                         params={
+                            "llm": LLM_NANO,
                             "config": factory(
                                 "GraphQueryConfig",
                                 mode="mix",
@@ -633,6 +676,7 @@ EXAMPLES = [
                         source_kind="index",
                         retriever_type="GraphRetriever",
                         params={
+                            "llm": LLM_NANO,
                             "config": factory(
                                 "GraphQueryConfig",
                                 mode="global",
@@ -658,6 +702,7 @@ EXAMPLES = [
                         source_kind="index",
                         retriever_type="GraphRetriever",
                         params={
+                            "llm": LLM_NANO,
                             "config": factory(
                                 "GraphQueryConfig",
                                 mode="hybrid",
@@ -1087,7 +1132,9 @@ EXAMPLES = [
                     "name": "11_log_regex_loader_pipeline",
                     "loader": {
                         "type": "RegexHierarchyLoader",
-                        "params": {"patterns": [[1, r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"]]},
+                        "params": {
+                            "patterns": [regex_hierarchy_pattern(1, r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")]
+                        },
                     },
                     "inputs": [],
                     "stages": [
@@ -1097,7 +1144,9 @@ EXAMPLES = [
                             "RegexHierarchySplitter",
                             0,
                             input_aliases=["LOADING"],
-                            params={"patterns": [[1, r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"]]},
+                            params={
+                                "patterns": [regex_hierarchy_pattern(1, r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")]
+                            },
                         )
                     ],
                     "indexing": {
@@ -1468,8 +1517,9 @@ EXAMPLES = [
                             "fetch_mode": "playwright",
                             "crawl_scope": "same_host",
                             "follow_download_links": False,
+                            "ignore_https_errors": True,
                             "cleanup_config": PLANTPAD_CLEANUP,
-                            "playwright_visible": True,
+                            "playwright_headless": True,
                             "playwright_navigation_config": factory(
                                 "PlaywrightNavigationConfig",
                                 enabled=True,
@@ -1512,8 +1562,9 @@ EXAMPLES = [
                             "crawl_scope": "same_host",
                             "follow_download_links": False,
                             "max_concurrency": 4,
+                            "ignore_https_errors": True,
                             "cleanup_config": PLANTPAD_CLEANUP,
-                            "playwright_visible": True,
+                            "playwright_headless": True,
                             "playwright_navigation_config": factory(
                                 "PlaywrightNavigationConfig",
                                 enabled=True,

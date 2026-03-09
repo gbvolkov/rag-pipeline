@@ -3,12 +3,19 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parents[1]
+
 if __package__ in {None, ""}:
-    raise SystemExit("Run this script as a module: python -m scripts.run_pipeline_examples")
+    # Allow direct execution from IDEs by making the repo root importable.
+    repo_root = str(REPO_ROOT)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
 
 from scripts.lib.pipeline_example_export import SnapshotExporter, make_run_root
 from scripts.lib.pipeline_example_manifest import PipelineExampleSpec, load_manifest, select_examples
@@ -48,7 +55,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--example-docs-root",
-        default="C:/Projects/rag-pipeline/example_docs",
+        default="example_docs",
         help="Root folder containing source files referenced by manifest",
     )
     parser.add_argument(
@@ -65,6 +72,13 @@ def _parse_examples_arg(raw: str | None) -> list[str] | None:
         return None
     values = [value.strip() for value in raw.split(",") if value.strip()]
     return values or None
+
+
+def _resolve_repo_path(raw_path: str) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
 
 
 def _print_example_list(
@@ -196,7 +210,7 @@ def main(
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    manifest = load_manifest(Path(args.manifest))
+    manifest = load_manifest(_resolve_repo_path(args.manifest))
     example_filter = _parse_examples_arg(args.examples)
     if args.run_all:
         mode = "all"
@@ -225,7 +239,7 @@ def main(
         print_func(f"Missing bearer token in env var '{args.token_env}'")
         return 1
 
-    run_root = make_run_root(Path(args.results_dir))
+    run_root = make_run_root(_resolve_repo_path(args.results_dir))
     exporter = SnapshotExporter(run_root=run_root)
     client = ApiClient(
         base_url=args.base_url,
@@ -238,7 +252,7 @@ def main(
         api_client=client,
         exporter=exporter,
         config=RunnerConfig(
-            example_docs_root=Path(args.example_docs_root),
+            example_docs_root=_resolve_repo_path(args.example_docs_root),
             poll_interval_seconds=args.poll_interval_seconds,
             poll_timeout_seconds=args.timeout_seconds,
             continue_on_error=args.continue_on_error == "true",

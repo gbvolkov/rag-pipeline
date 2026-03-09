@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     retriever_session_ttl_seconds: int = 3600
 
     local_blob_root: Path = Path("./data/blobstore")
+    index_storage_root: Path = Field(default=Path("./data/indexes"), alias="INDEX_STORAGE_ROOT")
     blob_backend: str = "filesystem"  # filesystem|minio
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "minioadmin"

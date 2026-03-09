@@ -11,7 +11,7 @@ dependencies = [
   "pyyaml>=6.0.2",
   "pydantic-settings>=2.11.0",
   "python-multipart>=0.0.20",
-  "rag-lib @ git+https://github.com/gbvolkov/rag-lib.git",
+  "rag-lib[graph,raptor] @ git+https://github.com/gbvolkov/rag-lib.git",
   "sqlalchemy>=2.0.43",
   "uvicorn[standard]>=0.35.0",
   "pandas>=3.0.1",

@@ -5,6 +5,7 @@ examples:
   input_mode: file
   input_spec:
     file: terms&defs.txt
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -40,9 +41,7 @@ examples:
             provider: openai
             model_name: text-embedding-3-small
           cleanup: true
-          collection_name: 01_text_basic
           dual_storage: true
-          doc_store_path: ./data/docstore/01_text_basic.pkl
         collection_name: 01_text_basic
         docstore_name: 01_text_basic_docstore
     run_payload_template: {}
@@ -71,6 +70,7 @@ examples:
   input_mode: file
   input_spec:
     file: quotes.toscrape.com_index.md
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -126,6 +126,7 @@ examples:
   input_mode: file
   input_spec:
     file: quotes.toscrape.com_index.md
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -180,6 +181,7 @@ examples:
   input_mode: file
   input_spec:
     file: 2025_soo_frp_russkij-yazyk_10_11-2.pdf
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -195,14 +197,14 @@ examples:
         component_type: RegexHierarchySplitter
         params:
           patterns:
-          - - 1
-            - ^\s*#\s+(.+)$
-          - - 2
-            - ^\s*##\s+(.+)$
-          - - 3
-            - ^\s*###\s+(.+)$
-          - - 1
-            - ^\s*\*\*(.+?)\*\*\s*$
+          - level: 1
+            pattern: ^\s*#\s+(.+)$
+          - level: 2
+            pattern: ^\s*##\s+(.+)$
+          - level: 3
+            pattern: ^\s*###\s+(.+)$
+          - level: 1
+            pattern: ^\s*\*\*(.+?)\*\*\s*$
           exclude_patterns:
           - ^\s*\d+\s*$
           include_parent_content: false
@@ -225,7 +227,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 03_pdf_semantic
         collection_name: 03_pdf_semantic
     run_payload_template: {}
     retrievals:
@@ -269,6 +270,7 @@ examples:
   input_mode: file
   input_spec:
     file: Georgy Volkov ru.pdf
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -304,9 +306,7 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 04_pdf_raptor
           dual_storage: true
-          doc_store_path: ./data/docstore/04_pdf_raptor.pkl
         collection_name: 04_pdf_raptor
         docstore_name: 04_pdf_raptor_docstore
     run_payload_template: {}
@@ -335,6 +335,14 @@ examples:
   input_mode: file
   input_spec:
     file: Параметризованные задачи.docx
+  project_create_payload:
+    graph_store_config:
+      provider: neo4j
+      params:
+        uri: bolt://neo4j:7687
+        username: neo4j
+        password: neo4j_password
+        database: neo4j
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -349,14 +357,14 @@ examples:
         component_type: RegexHierarchySplitter
         params:
           patterns:
-          - - 1
-            - ^\s*#\s+(.+)$
-          - - 2
-            - ^\s*##\s+(.+)$
-          - - 3
-            - ^\s*###\s+(.+)$
-          - - 4
-            - ^\s*####\s+(.+)$
+          - level: 1
+            pattern: ^\s*#\s+(.+)$
+          - level: 2
+            pattern: ^\s*##\s+(.+)$
+          - level: 3
+            pattern: ^\s*###\s+(.+)$
+          - level: 4
+            pattern: ^\s*####\s+(.+)$
           exclude_patterns:
           - ^\s*$
           include_parent_content: false
@@ -369,7 +377,12 @@ examples:
         params:
           llm: *id001
           store:
-            object_type: NetworkXGraphStore
+            object_type: create_graph_store
+            provider: neo4j
+            uri: bolt://neo4j:7687
+            username: neo4j
+            password: neo4j_password
+            database: neo4j
         input_aliases:
         - docx_structure
         position: 1
@@ -378,7 +391,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 05_docx_graph
         collection_name: 05_docx_graph
     run_payload_template: {}
     retrievals:
@@ -388,6 +400,7 @@ examples:
       create:
         retriever_type: GraphRetriever
         params:
+          llm: *id001
           config:
             object_type: GraphQueryConfig
             mode: local
@@ -417,6 +430,7 @@ examples:
       create:
         retriever_type: GraphRetriever
         params:
+          llm: *id001
           config:
             object_type: GraphQueryConfig
             mode: mix
@@ -446,6 +460,7 @@ examples:
       create:
         retriever_type: GraphRetriever
         params:
+          llm: *id001
           config:
             object_type: GraphQueryConfig
             mode: global
@@ -475,6 +490,7 @@ examples:
       create:
         retriever_type: GraphRetriever
         params:
+          llm: *id001
           config:
             object_type: GraphQueryConfig
             mode: hybrid
@@ -505,6 +521,7 @@ examples:
   input_mode: file
   input_spec:
     file: KP_IT_IB_Strategy_Recalc_v7_AppC.docx
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -529,7 +546,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 06_docx_regex
         collection_name: 06_docx_regex
     run_payload_template: {}
     retrievals:
@@ -606,6 +622,7 @@ examples:
   input_mode: file
   input_spec:
     file: data.csv
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -636,7 +653,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 07_csv_table_summary
         collection_name: 07_csv_table_summary
     run_payload_template: {}
     retrievals:
@@ -660,6 +676,7 @@ examples:
   input_mode: file
   input_spec:
     file: 07_md_table_summary_input_ru.md
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -687,7 +704,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 07_md_table_summary
         collection_name: 07_md_table_summary
     run_payload_template: {}
     retrievals:
@@ -711,6 +727,7 @@ examples:
   input_mode: file
   input_spec:
     file: 08_result.xlsx
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -735,7 +752,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 08_excel_csv_basic
         collection_name: 08_excel_csv_basic
     run_payload_template: {}
     retrievals:
@@ -759,6 +775,7 @@ examples:
   input_mode: file
   input_spec:
     file: 08_result.xlsx
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -782,7 +799,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 08_excel_md_basic
         collection_name: 08_excel_md_basic
     run_payload_template: {}
     retrievals:
@@ -806,6 +822,7 @@ examples:
   input_mode: file
   input_spec:
     file: QA_data.json
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -832,7 +849,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 09_json_hybrid
         collection_name: 09_json_hybrid
     run_payload_template: {}
     retrievals:
@@ -886,6 +902,7 @@ examples:
   input_mode: file
   input_spec:
     file: terms&defs.txt
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -910,7 +927,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 10_text_ensemble
         collection_name: 10_text_ensemble
     run_payload_template: {}
     retrievals:
@@ -970,6 +986,7 @@ examples:
   input_mode: file
   input_spec:
     file: anon.log
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -978,8 +995,8 @@ examples:
         type: RegexHierarchyLoader
         params:
           patterns:
-          - - 1
-            - ^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})
+          - level: 1
+            pattern: ^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})
       inputs: []
       stages:
       - stage_name: log_hierarchy
@@ -987,8 +1004,8 @@ examples:
         component_type: RegexHierarchySplitter
         params:
           patterns:
-          - - 1
-            - ^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})
+          - level: 1
+            pattern: ^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})
         input_aliases:
         - LOADING
         position: 0
@@ -997,7 +1014,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 11_log_regex_loader
         collection_name: 11_log_regex_loader
     run_payload_template: {}
     retrievals:
@@ -1021,6 +1037,7 @@ examples:
   input_mode: file
   input_spec:
     file: interview.txt
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -1042,7 +1059,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 12_qa_loader
         collection_name: 12_qa_loader
     run_payload_template: {}
     retrievals:
@@ -1088,6 +1104,7 @@ examples:
       path:
       - dual_storage_demo.txt
       level: 0
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -1112,9 +1129,7 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 13_dual_storage
           dual_storage: true
-          doc_store_path: ./data/docstore/13_dual_storage.pkl
         collection_name: 13_dual_storage
         docstore_name: 13_dual_storage_docstore
     run_payload_template: {}
@@ -1143,6 +1158,7 @@ examples:
   input_mode: file
   input_spec:
     file: statement.pdf
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -1172,7 +1188,6 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 14_mineru_pdf
         collection_name: 14_mineru_pdf
     run_payload_template: {}
     retrievals:
@@ -1196,6 +1211,7 @@ examples:
   input_mode: file
   input_spec:
     file: Digitme Презентация.pptx
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -1214,6 +1230,7 @@ examples:
   input_mode: file
   input_spec:
     file: 15_test.html
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -1250,9 +1267,7 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 16_html_html
           dual_storage: true
-          doc_store_path: ./data/docstore/16_html_html.pkl
         collection_name: 16_html_html
         docstore_name: 16_html_html_docstore
     run_payload_template: {}
@@ -1281,6 +1296,7 @@ examples:
   input_mode: file
   input_spec:
     file: 15_test.html
+  project_create_payload: {}
   runs:
   - run_name: main
     pipeline_create_payload:
@@ -1317,9 +1333,7 @@ examples:
         params:
           embeddings: *id002
           cleanup: true
-          collection_name: 16_html_md
           dual_storage: true
-          doc_store_path: ./data/docstore/16_html_md.pkl
         collection_name: 16_html_md
         docstore_name: 16_html_md_docstore
     run_payload_template: {}
@@ -1348,6 +1362,7 @@ examples:
   input_mode: url
   input_spec:
     url: https://plantpad.samlab.cn/search.html
+  project_create_payload: {}
   runs:
   - run_name: sync
     pipeline_create_payload:
@@ -1360,6 +1375,7 @@ examples:
           fetch_mode: playwright
           crawl_scope: same_host
           follow_download_links: false
+          ignore_https_errors: true
           cleanup_config: &id004
             object_type: WebCleanupConfig
             duplicate_tags:
@@ -1376,7 +1392,7 @@ examples:
             - '>'
             ignored_classes:
             - header
-          playwright_visible: true
+          playwright_headless: true
           playwright_navigation_config:
             object_type: PlaywrightNavigationConfig
             enabled: true
@@ -1431,8 +1447,9 @@ examples:
           crawl_scope: same_host
           follow_download_links: false
           max_concurrency: 4
+          ignore_https_errors: true
           cleanup_config: *id004
-          playwright_visible: true
+          playwright_headless: true
           playwright_navigation_config:
             object_type: PlaywrightNavigationConfig
             enabled: true
@@ -1482,6 +1499,7 @@ examples:
   input_mode: url
   input_spec:
     url: https://quotes.toscrape.com
+  project_create_payload: {}
   runs:
   - run_name: sync
     pipeline_create_payload:
@@ -1537,6 +1555,7 @@ examples:
   input_mode: url
   input_spec:
     url: https://example.com
+  project_create_payload: {}
   runs:
   - run_name: sync
     pipeline_create_payload:
@@ -1597,6 +1616,7 @@ examples:
   input_mode: url
   input_spec:
     url: https://quotes.toscrape.com
+  project_create_payload: {}
   runs:
   - run_name: sync
     pipeline_create_payload:

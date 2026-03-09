@@ -17,6 +17,12 @@ FastAPI orchestration layer for `rag-lib` with:
 uv sync --all-groups
 ```
 
+If you plan to use `WebLoader` or `AsyncWebLoader` with `fetch_mode="playwright"` outside Docker, install Chromium once:
+
+```bash
+uv run python -m playwright install chromium
+```
+
 2. Set environment (example):
 
 ```bash
@@ -37,7 +43,7 @@ uv run uvicorn app.main:app --reload
 
 ## Docker Compose
 
-Run full stack (API + worker + Postgres + Redis + MinIO):
+Run full stack (API + worker + Postgres + Redis + MinIO + Neo4j):
 
 1. Prepare env file:
 
@@ -53,14 +59,20 @@ Set at least `OPENAI_API_KEY` (required for default OpenAI embeddings/indexing).
 docker compose up -d --build
 ```
 
+Dependency install is cached in the image build:
+
+- changing app code rebuilds the image, but reuses the existing dependency layer;
+- changing `pyproject.toml`, `uv.lock`, or `.python-version` rebuilds dependencies;
+- package upgrades should go through `uv lock` / `uv lock --upgrade-package ...`, then `docker compose up -d --build`.
+
 Only one external port is published to avoid conflicts:
 
 - `http://127.0.0.1:8007/api/v1/docs`
 
 Notes:
 
-- The compose file mounts sibling repo `../rag-lib` into containers as `/opt/rag-lib`.
-- If your local path is different, update `docker-compose.yml` volume paths.
+- API, worker, and `nltk-init` now reuse the same built app image.
+- The app image installs Playwright Chromium during `docker compose build`, so Playwright-backed web loaders work in both API and worker containers after a rebuild.
 
 ## Tests
 

@@ -22,6 +22,10 @@ class ArtifactOut(BaseModel):
     content_json: dict[str, Any] | None
     blob_uri: str | None
     metadata_json: dict[str, Any] | None
+    storage_backend: str | None
+    vector_collection_name: str | None
+    vector_persist_path: str | None
+    docstore_persist_path: str | None
     created_at: datetime
 
 
@@ -38,5 +42,8 @@ class IndexListItem(BaseModel):
     artifact_key: str
     version: int
     metadata_json: dict[str, Any] | None
+    storage_backend: str | None = None
+    vector_collection_name: str | None = None
+    vector_persist_path: str | None = None
+    docstore_persist_path: str | None = None
     created_at: datetime
-

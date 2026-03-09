@@ -21,6 +21,25 @@ class APIError(Exception):
     details: dict[str, Any] | None = None
     rag_lib_exception_type: str | None = None
 
+    def __post_init__(self) -> None:
+        self.args = self._serialization_args()
+
+    def _serialization_args(self) -> tuple[Any, ...]:
+        if type(self) is APIError:
+            return (
+                self.status_code,
+                self.code,
+                self.message,
+                self.details,
+                self.rag_lib_exception_type,
+            )
+        if type(self) is ServiceUnavailableError:
+            return (self.message, self.details, self.rag_lib_exception_type)
+        return (self.message, self.details)
+
+    def __str__(self) -> str:
+        return self.message
+
 
 class NotFoundError(APIError):
     def __init__(self, message: str, details: dict[str, Any] | None = None):

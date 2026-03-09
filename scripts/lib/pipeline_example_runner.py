@@ -272,7 +272,8 @@ class ExampleRunResult:
 @dataclass(slots=True)
 class ArtifactSnapshot:
     documents: list[dict[str, Any]] = field(default_factory=list)
-    segments_by_stage: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    stage_artifacts_by_stage: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    stage_artifact_kinds: dict[str, str] = field(default_factory=dict)
     indices: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -306,7 +307,10 @@ class PipelineExampleRunner:
         run_results: list[RunExecutionResult] = []
         logger.info("Starting example run: example_id=%s", spec.example_id)
 
-        project_response = self.api.post("/projects", json_payload={"name": f"example-{spec.example_id}"})
+        project_payload = copy.deepcopy(spec.project_create_payload)
+        project_payload["name"] = project_payload.get("name") or f"example-{spec.example_id}"
+        self._write_example_json(spec.example_id, "project.create.request.json", project_payload)
+        project_response = self.api.post("/projects", json_payload=project_payload)
         self._write_example_json(spec.example_id, "project.create.response.json", project_response.snapshot())
         if not project_response.ok:
             if spec.expected_outcome == "error":
@@ -505,23 +509,35 @@ class PipelineExampleRunner:
                 run_scope,
             )
 
-        for stage_name in self._artifact_stage_names(run_spec.pipeline_create_payload):
-            segments = self._fetch_all_paginated(
-                f"/projects/{project_id}/pipelines/{pipeline_id}/segments/{stage_name}",
-                list_filename=f"artifacts.segments.{_slug(stage_name)}.list.json",
+        for stage_name, artifact_kind in self._artifact_stage_specs(run_spec.pipeline_create_payload):
+            if artifact_kind == "graph_entity":
+                list_path = f"/projects/{project_id}/pipelines/{pipeline_id}/graph-entities/{stage_name}"
+                list_filename = f"artifacts.graph_entities.{_slug(stage_name)}.list.json"
+                detail_path_prefix = f"/projects/{project_id}/graph-entities"
+                detail_filename_prefix = "artifact.graph_entity"
+            else:
+                list_path = f"/projects/{project_id}/pipelines/{pipeline_id}/segments/{stage_name}"
+                list_filename = f"artifacts.segments.{_slug(stage_name)}.list.json"
+                detail_path_prefix = f"/projects/{project_id}/segments"
+                detail_filename_prefix = "artifact.segment"
+
+            stage_artifacts = self._fetch_all_paginated(
+                list_path,
+                list_filename=list_filename,
                 example_id=spec.example_id,
                 scope_parts=(run_scope,),
             )
-            snapshot.segments_by_stage[stage_name] = segments
-            for item in segments:
-                segment_id = item.get("id")
-                if not segment_id:
+            snapshot.stage_artifacts_by_stage[stage_name] = stage_artifacts
+            snapshot.stage_artifact_kinds[stage_name] = artifact_kind
+            for item in stage_artifacts:
+                artifact_id = item.get("id")
+                if not artifact_id:
                     continue
-                response = self.api.get(f"/projects/{project_id}/segments/{segment_id}")
-                self._require_ok(response, operation=f"Fetch segment artifact '{segment_id}'")
+                response = self.api.get(f"{detail_path_prefix}/{artifact_id}")
+                self._require_ok(response, operation=f"Fetch {artifact_kind} artifact '{artifact_id}'")
                 self._write_example_json(
                     spec.example_id,
-                    f"artifact.segment.{segment_id}.json",
+                    f"{detail_filename_prefix}.{artifact_id}.json",
                     response.snapshot(),
                     run_scope,
                 )
@@ -591,7 +607,7 @@ class PipelineExampleRunner:
             create_request["index_artifact_id"] = str(artifacts.indices[0]["artifact_id"])
         else:
             stage_name = retrieval.source_stage_name or ""
-            stage_items = artifacts.segments_by_stage.get(stage_name, [])
+            stage_items = artifacts.stage_artifacts_by_stage.get(stage_name, [])
             artifact_ids = [str(item["id"]) for item in stage_items if item.get("id")]
             if not artifact_ids:
                 if strict:
@@ -820,13 +836,13 @@ class PipelineExampleRunner:
             time.sleep(self.config.poll_interval_seconds)
 
     @staticmethod
-    def _artifact_stage_names(pipeline_payload: dict[str, Any]) -> list[str]:
-        names: list[str] = []
+    def _artifact_stage_specs(pipeline_payload: dict[str, Any]) -> list[tuple[str, str]]:
+        specs: list[tuple[str, str]] = []
         runtime_input = pipeline_payload.get("runtime_input")
         if isinstance(runtime_input, dict):
             alias = runtime_input.get("alias")
             if isinstance(alias, str) and alias.strip() and runtime_input.get("artifact_kind") == "segment":
-                names.append(alias)
+                specs.append((alias, "segment"))
 
         stages = pipeline_payload.get("stages")
         if isinstance(stages, list):
@@ -835,8 +851,14 @@ class PipelineExampleRunner:
                     continue
                 stage_name = stage.get("stage_name")
                 if isinstance(stage_name, str) and stage_name.strip():
-                    names.append(stage_name)
-        return names
+                    artifact_kind = "segment"
+                    if (
+                        stage.get("stage_kind") == "processor"
+                        and stage.get("component_type") == "EntityExtractor"
+                    ):
+                        artifact_kind = "graph_entity"
+                    specs.append((stage_name, artifact_kind))
+        return specs
 
     @staticmethod
     def _json_dict(response: ApiResponse) -> dict[str, Any]:

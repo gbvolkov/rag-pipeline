@@ -6,12 +6,70 @@ from app.core.errors import UnprocessableError
 from app.schemas.pipelines import PipelineCreate
 from app.services.runtime_objects import RuntimeObjectError, validate_runtime_object_specs
 
+_MANAGED_CHROMA_RESERVED_PARAM_KEYS = ("collection_name", "doc_store_path")
+
+
+def _validate_regex_hierarchy_splitter_params(params: dict[str, object]) -> None:
+    patterns = params.get("patterns")
+    if patterns is None:
+        return
+    if not isinstance(patterns, list):
+        raise UnprocessableError(
+            "RegexHierarchySplitter params.patterns must be an array of pattern objects",
+            details={"path": "splitter.RegexHierarchySplitter.params.patterns"},
+        )
+
+    list_pair_indexes: list[int] = []
+    invalid_indexes: list[int] = []
+    for idx, entry in enumerate(patterns):
+        if isinstance(entry, dict) or isinstance(entry, tuple):
+            continue
+        if isinstance(entry, list):
+            list_pair_indexes.append(idx)
+            continue
+        invalid_indexes.append(idx)
+
+    if not list_pair_indexes and not invalid_indexes:
+        return
+
+    raise UnprocessableError(
+        "RegexHierarchySplitter params.patterns must use object entries like "
+        "{'level': 1, 'pattern': '^...$'}; list pairs such as [1, '^...$'] are not accepted by the API",
+        details={
+            "path": "splitter.RegexHierarchySplitter.params.patterns",
+            "list_pair_indexes": list_pair_indexes,
+            "invalid_indexes": invalid_indexes,
+        },
+    )
+
 
 def _validate_component_params(kind: str, type_name: str, params: dict[str, object]) -> None:
     try:
         validate_runtime_object_specs(params, path=f"{kind}.{type_name}.params")
     except RuntimeObjectError as exc:
         raise UnprocessableError(str(exc)) from exc
+    if kind == "splitter" and type_name == "RegexHierarchySplitter":
+        _validate_regex_hierarchy_splitter_params(params)
+
+
+def validate_indexing_params(index_type: str, params: dict[str, object], *, path: str) -> None:
+    try:
+        validate_runtime_object_specs(params, path=path)
+    except RuntimeObjectError as exc:
+        raise UnprocessableError(str(exc)) from exc
+
+    if str(index_type).strip().lower() != "chroma":
+        return
+
+    forbidden = [key for key in _MANAGED_CHROMA_RESERVED_PARAM_KEYS if key in params]
+    if not forbidden:
+        return
+
+    joined = ", ".join(forbidden)
+    raise UnprocessableError(
+        f"Managed Chroma indexes do not accept physical storage params: {joined}",
+        details={"forbidden_params": forbidden, "path": path},
+    )
 
 
 def _validate_input_refs(pipeline: PipelineCreate) -> None:
@@ -130,12 +188,10 @@ def validate_pipeline(pipeline: PipelineCreate) -> str:
         _validate_component_params(stage.stage_kind, stage.component_type, stage.params)
 
     if pipeline.indexing is not None:
-        try:
-            validate_runtime_object_specs(
-                pipeline.indexing.params,
-                path=f"indexing.{pipeline.indexing.index_type}.params",
-            )
-        except RuntimeObjectError as exc:
-            raise UnprocessableError(str(exc)) from exc
+        validate_indexing_params(
+            pipeline.indexing.index_type,
+            pipeline.indexing.params,
+            path=f"indexing.{pipeline.indexing.index_type}.params",
+        )
 
     return classify_pipeline_shape(pipeline)

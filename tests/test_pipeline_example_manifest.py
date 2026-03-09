@@ -95,6 +95,74 @@ def test_manifest_contains_expected_ids() -> None:
     assert [item.example_id for item in manifest.examples] == EXPECTED_IDS
 
 
+def test_manifest_chroma_examples_do_not_embed_physical_storage_params() -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    for example in manifest.examples:
+        for run in example.runs:
+            indexing = run.pipeline_create_payload.get("indexing")
+            if not isinstance(indexing, dict):
+                continue
+            if str(indexing.get("index_type", "")).strip().lower() != "chroma":
+                continue
+            params = indexing.get("params") or {}
+            assert "collection_name" not in params
+            assert "doc_store_path" not in params
+
+
+def test_manifest_regex_hierarchy_patterns_use_object_entries() -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    for example in manifest.examples:
+        for run in example.runs:
+            loader = run.pipeline_create_payload.get("loader")
+            if isinstance(loader, dict) and loader.get("type") == "RegexHierarchyLoader":
+                params = loader.get("params") or {}
+                patterns = params.get("patterns") or []
+                assert all(isinstance(entry, dict) for entry in patterns)
+
+            for stage in run.pipeline_create_payload.get("stages", []):
+                if not isinstance(stage, dict) or stage.get("component_type") != "RegexHierarchySplitter":
+                    continue
+                params = stage.get("params") or {}
+                patterns = params.get("patterns") or []
+                assert all(isinstance(entry, dict) for entry in patterns)
+
+
+def test_manifest_docx_graph_uses_project_level_neo4j_store() -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    example = next(item for item in manifest.examples if item.example_id == "05_docx_graph")
+
+    assert example.project_create_payload == {
+        "graph_store_config": {
+            "provider": "neo4j",
+            "params": {
+                "uri": "bolt://neo4j:7687",
+                "username": "neo4j",
+                "password": "neo4j_password",
+                "database": "neo4j",
+            },
+        }
+    }
+
+    stage = next(
+        stage
+        for stage in example.runs[0].pipeline_create_payload["stages"]
+        if stage.get("stage_name") == "graph_entities"
+    )
+    assert stage["params"]["store"]["object_type"] == "create_graph_store"
+    assert stage["params"]["store"]["provider"] == "neo4j"
+
+
+def test_manifest_plantpad_playwright_runs_are_headless() -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    example = next(item for item in manifest.examples if item.example_id == "17A_web_loader_plantpad")
+
+    for run in example.runs:
+        params = ((run.pipeline_create_payload.get("loader") or {}).get("params") or {})
+        assert params.get("playwright_headless") is True
+        assert params.get("ignore_https_errors") is True
+        assert "playwright_visible" not in params
+
+
 def test_select_examples_respects_requested_order() -> None:
     manifest = load_manifest(MANIFEST_PATH)
     selected = select_examples(manifest, ["10_text_ensemble", "01_text_basic"])

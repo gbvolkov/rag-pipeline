@@ -3,15 +3,16 @@ from __future__ import annotations
 import json
 import logging
 import math
-import tempfile
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, File, Form, Query, Request, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session
+from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, UnprocessableError
 from app.models.entities import (
     Artifact,
@@ -57,7 +58,7 @@ from app.services.jobs import (
     transition_job,
 )
 from app.services.pipeline_advisory_validator import validate_pipeline_advisory
-from app.services.pipeline_validator import validate_pipeline
+from app.services.pipeline_validator import validate_indexing_params, validate_pipeline
 from app.workers.tasks import run_mineru_job_task, run_pipeline_job_task, run_reindex_job_task
 
 router = APIRouter()
@@ -443,10 +444,13 @@ async def submit_run(
         )
     if file is not None:
         content = await file.read()
+        settings = get_settings()
         suffix = Path(file.filename or "upload.bin").suffix or ".bin"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as fp:
-            fp.write(content)
-            payload["uploaded_file_path"] = fp.name
+        upload_dir = settings.local_blob_root / "_uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        upload_path = upload_dir / f"{uuid4()}{suffix}"
+        upload_path.write_bytes(content)
+        payload["uploaded_file_path"] = str(upload_path)
         payload["file_name"] = file.filename or Path(payload["uploaded_file_path"]).name
     if "example_profile_id" in payload:
         raise UnprocessableError("example_profile_id is unsupported by the production API")
@@ -596,6 +600,37 @@ def get_segment(pid: str, sid: str, db: Session = Depends(db_session)):
     return ArtifactOut.model_validate(row)
 
 
+@router.get("/projects/{pid}/pipelines/{plid}/graph-entities/{stage}", response_model=PaginatedResponse[ArtifactOut])
+def list_graph_entities(
+    pid: str,
+    plid: str,
+    stage: str,
+    version: int | None = Query(default=None, ge=1),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(db_session),
+):
+    stmt = select(Artifact).where(
+        Artifact.project_id == pid,
+        Artifact.pipeline_id == plid,
+        Artifact.artifact_kind == "graph_entity",
+        Artifact.stage_name == stage,
+    ).order_by(Artifact.created_at.desc())
+    if version is not None:
+        stmt = stmt.where(Artifact.version == version)
+    total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
+    rows = db.execute(_paginate_query(stmt, offset=offset, limit=limit)).scalars().all()
+    return _as_paginated([ArtifactOut.model_validate(r) for r in rows], total, offset, limit)
+
+
+@router.get("/projects/{pid}/graph-entities/{gid}", response_model=ArtifactOut)
+def get_graph_entity(pid: str, gid: str, db: Session = Depends(db_session)):
+    row = db.get(Artifact, gid)
+    if row is None or row.project_id != pid or row.artifact_kind != "graph_entity":
+        raise NotFoundError("Graph entity artifact not found")
+    return ArtifactOut.model_validate(row)
+
+
 @router.get("/projects/{pid}/indices", response_model=PaginatedResponse[IndexListItem])
 def list_indices(
     pid: str,
@@ -620,6 +655,10 @@ def list_indices(
             artifact_key=r.artifact_key,
             version=r.version,
             metadata_json=r.metadata_json,
+            storage_backend=r.storage_backend,
+            vector_collection_name=r.vector_collection_name,
+            vector_persist_path=r.vector_persist_path,
+            docstore_persist_path=r.docstore_persist_path,
             created_at=r.created_at,
         )
         for r in rows
@@ -649,6 +688,16 @@ def get_index(pid: str, iid: str, version: int | None = Query(default=None, ge=1
 @router.post("/projects/{pid}/reindex", status_code=status.HTTP_202_ACCEPTED)
 def submit_reindex(pid: str, payload: ReindexRequest, db: Session = Depends(db_session)):
     assert_project_active(db, pid)
+    indexing = payload.indexing
+    index_type = indexing.get("index_type")
+    if not isinstance(index_type, str) or not index_type.strip():
+        raise UnprocessableError("Reindex payload missing indexing.index_type")
+    params = indexing.get("params", {})
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        raise UnprocessableError("Reindex payload indexing.params must be an object")
+    validate_indexing_params(index_type, params, path=f"indexing.{index_type}.params")
     job = create_job(
         db,
         project_id=pid,

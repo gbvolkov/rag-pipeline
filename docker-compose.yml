@@ -1,47 +1,56 @@
+x-app-build: &app-build
+  context: .
+  dockerfile: Dockerfile
+
 x-app-env: &app-env
   DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/rag_api
   REDIS_URL: redis://redis:6379/0
   CELERY_ALWAYS_EAGER: "false"
   LOCAL_BLOB_ROOT: /data/blobstore
+  INDEX_STORAGE_ROOT: /data/indexes
+  NLTK_DATA: /data/nltk_data
   BLOB_BACKEND: filesystem
   MINIO_ENDPOINT: minio:9000
   MINIO_ACCESS_KEY: minioadmin
   MINIO_SECRET_KEY: minioadmin
   MINIO_SECURE: "false"
   MINIO_BUCKET: rag-artifacts
+  VECTOR_PATH: /data/indexes/chroma
 
 services:
   rag-pipeline:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: rag-pipeline-app:dev
+    build: *app-build
     env_file:
       - .env
-    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8007"]
+    command: ["/app/.venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8007"]
     environment: *app-env
     depends_on:
+      neo4j:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      nltk-init:
+        condition: service_completed_successfully
     ports:
       - "8007:8007"
     volumes:
       - rag_blob_data:/data/blobstore
+      - rag_index_data:/data/indexes
+      - rag_nltk_data:/data/nltk_data
     restart: unless-stopped
 
   rag-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: rag-pipeline-app:dev
+    build: *app-build
     env_file:
       - .env
     command: [
-      "uv",
-      "run",
-      "celery",
+      "/app/.venv/bin/celery",
       "-A",
       "app.core.celery_app.celery_app",
       "worker",
@@ -53,14 +62,20 @@ services:
     ]
     environment: *app-env
     depends_on:
+      neo4j:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      nltk-init:
+        condition: service_completed_successfully
     volumes:
       - rag_blob_data:/data/blobstore
+      - rag_index_data:/data/indexes
+      - rag_nltk_data:/data/nltk_data
     restart: unless-stopped
 
   postgres:
@@ -100,6 +115,19 @@ services:
       - minio_data:/data
     restart: unless-stopped
 
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/neo4j_password
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p neo4j_password 'RETURN 1;'"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+    volumes:
+      - neo4j_data:/data
+    restart: unless-stopped
+
   minio-init:
     image: minio/mc:latest
     depends_on:
@@ -113,8 +141,32 @@ services:
         exit 0
     restart: "no"
 
+  nltk-init:
+    image: rag-pipeline-app:dev
+    build: *app-build
+    env_file:
+      - .env
+    environment: *app-env
+    command:
+      - /app/.venv/bin/python
+      - -c
+      - |
+        from pathlib import Path
+        import nltk
+
+        target = Path("/data/nltk_data")
+        target.mkdir(parents=True, exist_ok=True)
+        for resource in ("punkt", "punkt_tab"):
+            nltk.download(resource, download_dir=str(target), quiet=True, raise_on_error=True)
+    volumes:
+      - rag_nltk_data:/data/nltk_data
+    restart: "no"
+
 volumes:
   postgres_data:
   redis_data:
   minio_data:
+  neo4j_data:
   rag_blob_data:
+  rag_index_data:
+  rag_nltk_data:

@@ -163,6 +163,42 @@ def test_manifest_plantpad_playwright_runs_are_headless() -> None:
         assert "playwright_visible" not in params
 
 
+def test_manifest_pptx_example_matches_full_cycle_shape() -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    example = next(item for item in manifest.examples if item.example_id == "15_pptx_unsupported")
+
+    assert example.expected_outcome == "success"
+    run = example.runs[0]
+    loader = run.pipeline_create_payload["loader"]
+    assert loader["type"] == "PPTXLoader"
+    assert loader["params"]["include_notes"] is True
+    assert loader["params"]["summarize_visuals"] is True
+    assert loader["params"]["llm"]["object_type"] == "create_llm"
+    assert loader["params"]["llm"]["model_name"] == "gpt-4o-mini"
+
+    stages = run.pipeline_create_payload["stages"]
+    assert [stage["stage_name"] for stage in stages] == ["slide_parents", "slide_child_chunks"]
+    assert stages[0]["component_type"] == "RegexSplitter"
+    assert stages[0]["params"]["pattern"] == r"(?m)(?=^# Slide \d+: .+$)"
+    assert stages[1]["component_type"] == "RecursiveCharacterTextSplitter"
+    assert stages[1]["params"] == {"chunk_size": 700, "chunk_overlap": 100}
+
+    indexing = run.pipeline_create_payload["indexing"]
+    assert indexing["collection_name"] == "15_pptx_full_cycle"
+    assert indexing["docstore_name"] == "15_pptx_full_cycle_docstore"
+    assert indexing["params"]["dual_storage"] is True
+
+    retrieval = run.retrievals[0]
+    assert retrieval.retriever_type == "create_scored_dual_storage_retriever"
+    assert retrieval.retriever_params["id_key"] == "parent_id"
+    assert retrieval.retriever_params["search_kwargs"] == {"k": 6}
+    assert [query.query for query in retrieval.queries] == [
+        "What services does Digitme connect?",
+        "What benefits do clients get from the automation?",
+        "How does the team work with a client project?",
+    ]
+
+
 def test_select_examples_respects_requested_order() -> None:
     manifest = load_manifest(MANIFEST_PATH)
     selected = select_examples(manifest, ["10_text_ensemble", "01_text_basic"])

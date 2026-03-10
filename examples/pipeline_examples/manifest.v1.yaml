@@ -1215,16 +1215,75 @@ examples:
   runs:
   - run_name: main
     pipeline_create_payload:
-      name: 15_pptx_unsupported_pipeline
+      name: 15_pptx_full_cycle_pipeline
       loader:
         type: PPTXLoader
-        params: {}
+        params:
+          include_notes: true
+          summarize_visuals: true
+          llm:
+            object_type: create_llm
+            provider: openai
+            model_name: gpt-4o-mini
+            streaming: false
       inputs: []
-      stages: []
+      stages:
+      - stage_name: slide_parents
+        stage_kind: splitter
+        component_type: RegexSplitter
+        params:
+          pattern: '(?m)(?=^# Slide \d+: .+$)'
+          chunk_size: 4000
+          chunk_overlap: 0
+        input_aliases:
+        - LOADING
+        position: 0
+      - stage_name: slide_child_chunks
+        stage_kind: splitter
+        component_type: RecursiveCharacterTextSplitter
+        params:
+          chunk_size: 700
+          chunk_overlap: 100
+        input_aliases:
+        - slide_parents
+        position: 1
+      indexing:
+        index_type: chroma
+        params:
+          embeddings: *id002
+          cleanup: true
+          dual_storage: true
+        collection_name: 15_pptx_full_cycle
+        docstore_name: 15_pptx_full_cycle_docstore
     run_payload_template: {}
-    retrievals: []
-  expected_outcome: error
-  notes: Expected pipeline creation failure because rag-lib exposes no PPTXLoader.
+    retrievals:
+    - name: dual
+      source:
+        kind: index
+      create:
+        retriever_type: create_scored_dual_storage_retriever
+        params:
+          id_key: parent_id
+          search_kwargs:
+            k: 6
+          search_type: similarity_score_threshold
+          score_threshold: 0.0
+      requires_session: false
+      queries:
+      - name: services_connected
+        query: What services does Digitme connect?
+        top_k: 6
+        strict_match: true
+      - name: automation_benefits
+        query: What benefits do clients get from the automation?
+        top_k: 6
+        strict_match: true
+      - name: client_project_workflow
+        query: How does the team work with a client project?
+        top_k: 6
+        strict_match: true
+  expected_outcome: success
+  notes: Pipeline-only API parity with rag-lib; legacy upstream filename retained.
 - example_id: 16_html_html
   source_example_file: 16_html_html.py
   input_mode: file

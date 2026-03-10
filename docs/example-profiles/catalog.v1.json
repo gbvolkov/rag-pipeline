@@ -178,9 +178,9 @@
       "examples": [
         "15_pptx_unsupported.py"
       ],
-      "support_status": "expected_error",
+      "support_status": "implemented",
       "implemented": true,
-      "notes": "Expected strict rejection: Unknown loader type 'PPTXLoader'"
+      "notes": "Manifest example validates against installed rag-lib capabilities"
     },
     {
       "profile_id": "profile::16_html_html",

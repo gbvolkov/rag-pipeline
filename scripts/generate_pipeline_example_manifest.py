@@ -128,6 +128,12 @@ LLM_NANO = factory(
     temperature=0,
     streaming=False,
 )
+LLM_4O_MINI = factory(
+    "create_llm",
+    provider="openai",
+    model_name="gpt-4o-mini",
+    streaming=False,
+)
 EMBEDDINGS_SMALL = factory(
     "create_embeddings_model",
     provider="openai",
@@ -1355,15 +1361,87 @@ EXAMPLES = [
             run(
                 "main",
                 {
-                    "name": "15_pptx_unsupported_pipeline",
-                    "loader": {"type": "PPTXLoader", "params": {}},
+                    "name": "15_pptx_full_cycle_pipeline",
+                    "loader": {
+                        "type": "PPTXLoader",
+                        "params": {
+                            "include_notes": True,
+                            "summarize_visuals": True,
+                            "llm": LLM_4O_MINI,
+                        },
+                    },
                     "inputs": [],
-                    "stages": [],
-                }
-            )
+                    "stages": [
+                        stage(
+                            "slide_parents",
+                            "splitter",
+                            "RegexSplitter",
+                            0,
+                            input_aliases=["LOADING"],
+                            params={
+                                "pattern": r"(?m)(?=^# Slide \d+: .+$)",
+                                "chunk_size": 4000,
+                                "chunk_overlap": 0,
+                            },
+                        ),
+                        stage(
+                            "slide_child_chunks",
+                            "splitter",
+                            "RecursiveCharacterTextSplitter",
+                            1,
+                            input_aliases=["slide_parents"],
+                            params={"chunk_size": 700, "chunk_overlap": 100},
+                        ),
+                    ],
+                    "indexing": {
+                        "index_type": "chroma",
+                        "params": {
+                            "embeddings": EMBEDDINGS_SMALL,
+                            "cleanup": True,
+                            "dual_storage": True,
+                            "collection_name": "15_pptx_full_cycle",
+                            "doc_store_path": "./data/docstore/15_pptx_full_cycle.pkl",
+                        },
+                        "collection_name": "15_pptx_full_cycle",
+                        "docstore_name": "15_pptx_full_cycle_docstore",
+                    },
+                },
+                retrievals=[
+                    retrieval(
+                        "dual",
+                        source_kind="index",
+                        retriever_type="create_scored_dual_storage_retriever",
+                        params={
+                            "id_key": "parent_id",
+                            "search_kwargs": {"k": 6},
+                            "search_type": "similarity_score_threshold",
+                            "score_threshold": 0.0,
+                        },
+                        queries=[
+                            query(
+                                "services_connected",
+                                "What services does Digitme connect?",
+                                6,
+                                strict_match=True,
+                            ),
+                            query(
+                                "automation_benefits",
+                                "What benefits do clients get from the automation?",
+                                6,
+                                strict_match=True,
+                            ),
+                            query(
+                                "client_project_workflow",
+                                "How does the team work with a client project?",
+                                6,
+                                strict_match=True,
+                            ),
+                        ],
+                    )
+                ],
+            ),
         ],
-        expected_outcome="error",
-        notes="Expected pipeline creation failure because rag-lib exposes no PPTXLoader.",
+        notes="Pipeline-only API parity with rag-lib; legacy upstream filename retained.",
     ),
     example(
         "16_html_html",

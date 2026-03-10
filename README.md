@@ -4,10 +4,10 @@ FastAPI orchestration layer for `rag-lib` with:
 
 - strict `rag-lib` execution (no hidden fallback logic),
 - full runtime capability discovery (`/api/v1/capabilities`),
-- example-profile coverage matrix (`/api/v1/capabilities/examples`),
-- 33 required orchestration/retrieval/lineage endpoints from TRD + 2 parity endpoints,
+- immutable pipeline definitions plus artifact versioning and lineage persistence,
+- pipeline runs, reindexing, retriever lifecycle, and retrieval result APIs,
 - Celery + Redis async job execution with Postgres as canonical state,
-- artifact versioning and lineage persistence.
+- example manifest tooling for remote pipeline simulation and parity checks.
 
 ## Quick Start
 
@@ -41,9 +41,18 @@ uv run uvicorn app.main:app --reload
 
 - `http://127.0.0.1:8000/api/v1/docs`
 
+## Documentation
+
+- `docs/DEVELOPERS_GUIDE.md`: detailed pipeline developer guide covering entry points, production pipeline manifests, execution flow, example manifests, and manifest enums/types.
+- `docs/DEVOPS_GUIDE.md`: Docker Compose operations guide covering service topology, startup ordering, storage, configuration precedence, and troubleshooting.
+- `docs/example-profiles/PIPELINE_EXAMPLES_RUNNER.md`: CLI usage for `scripts/run_pipeline_examples.py`.
+- `GET /api/v1/capabilities`: live runtime inventory of discovered `rag-lib` loaders, splitters, processors, retrievers, and advisory literals.
+
 ## Docker Compose
 
 Run full stack (API + worker + Postgres + Redis + MinIO + Neo4j):
+
+For full operational details, see `docs/DEVOPS_GUIDE.md`.
 
 1. Prepare env file:
 
@@ -72,7 +81,8 @@ Only one external port is published to avoid conflicts:
 Notes:
 
 - API, worker, and `nltk-init` now reuse the same built app image.
-- The app image installs Playwright Chromium during `docker compose build`, so Playwright-backed web loaders work in both API and worker containers after a rebuild.
+- The app image installs the Linux Chromium runtime libraries via `apt`, then downloads the Playwright Chromium binary during `docker compose build`.
+- This avoids the heavier `playwright install --with-deps` path, which can be OOM-killed on smaller Docker builders.
 
 ## Tests
 
@@ -103,6 +113,9 @@ Output report:
 - `app/api/routes.py`: all public API endpoints.
 - `app/models/entities.py`: persistence model and constraints.
 - `app/services/capabilities.py`: runtime `rag-lib` feature discovery.
-- `app/services/example_profiles.py`: example profile catalog/matrix sync.
 - `app/services/jobs.py`: orchestration state machine and artifact persistence.
 - `app/services/rag_adapter.py`: strict adapter into `rag-lib`.
+- `app/services/pipeline_validator.py`: production pipeline manifest validation and shape classification.
+- `app/services/runtime_objects.py`: nested manifest `object_type` validation/materialization.
+- `scripts/run_pipeline_examples.py`: remote example-manifest runner.
+- `scripts/lib/pipeline_example_manifest.py`: example manifest loader and schema helpers.

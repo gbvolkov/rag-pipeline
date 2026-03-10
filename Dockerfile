@@ -11,7 +11,38 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential git curl \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        fonts-liberation \
+        git \
+        libasound2 \
+        libatk-bridge2.0-0 \
+        libatk1.0-0 \
+        libatspi2.0-0 \
+        libcairo2 \
+        libcups2 \
+        libdbus-1-3 \
+        libdrm2 \
+        libfontconfig1 \
+        libfreetype6 \
+        libgbm1 \
+        libglib2.0-0 \
+        libgtk-3-0 \
+        libnspr4 \
+        libnss3 \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libx11-6 \
+        libx11-xcb1 \
+        libxcb1 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxext6 \
+        libxfixes3 \
+        libxkbcommon0 \
+        libxrandr2 \
+        libxrender1 \
+        libxshmfence1 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv
@@ -22,7 +53,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project \
     && uv pip install --python /app/.venv/bin/python "psycopg[binary]>=3.2.0"
 
-RUN /app/.venv/bin/python -m playwright install --with-deps chromium
+RUN /app/.venv/bin/python -m playwright install chromium
 
 COPY . /app
 

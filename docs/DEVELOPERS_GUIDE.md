@@ -1,1587 +1,1141 @@
-# rag-lib Developer's Guide
+# Pipeline Developer's Guide
 
-This guide is aligned to the current code in `src/rag_lib`.
+This guide documents how pipelines work in `rag-pipeline` today.
 
-## 1. Version and Runtime
+It covers two different manifest surfaces:
 
-- Package name: `rag-lib`
-- Current project version (`pyproject.toml`): `0.2.3`
-- Supported Python: `>=3.12,<3.14`
+1. The production pipeline definition accepted by `POST /api/v1/projects/{project_id}/pipelines`.
+2. The example-runner manifest stored in `examples/pipeline_examples/manifest.v1.yaml`.
 
-To check installed package version:
+Those two schemas are related, but they are not the same thing:
+
+- The production pipeline definition is the contract persisted in the database and executed by the API/worker.
+- The example manifest is a test harness format that creates projects, creates pipelines, submits runs, and optionally executes retrieval checks against the API.
+
+For the live component inventory of the currently installed `rag-lib`, use `GET /api/v1/capabilities`. This guide explains the repository contract and the manifest shapes enforced by this repo; the capabilities endpoint remains the runtime authority for which loader/splitter/processor/retriever names are actually importable.
+
+## 1. Architecture Overview
+
+At a high level the system is split into five layers:
+
+1. FastAPI contract layer
+   - Validates project, pipeline, run, artifact, and retriever requests.
+   - Persists immutable pipeline definitions and job records.
+2. Pipeline validation layer
+   - Enforces structural rules on pipeline definitions.
+   - Performs advisory capability checks against the installed `rag-lib`.
+3. Worker orchestration layer
+   - Resolves runtime inputs and upstream pipeline inputs.
+   - Executes loader -> stages -> indexing.
+   - Persists artifacts plus lineage edges.
+4. `rag-lib` adapter layer
+   - Materializes runtime object specs.
+   - Instantiates loaders, splitters, processors, indexes, and retrievers.
+   - Normalizes `rag-lib` outputs into JSON-safe payloads.
+5. Example harness layer
+   - Loads `examples/pipeline_examples/manifest.v1.yaml`.
+   - Creates test projects/pipelines through the API.
+   - Polls jobs and exports snapshots for parity and debugging.
+
+The main design rule is strict orchestration with no hidden API-side fallback behavior. Unknown component names may be accepted with advisory warnings at create time, but execution still fails fast if the runtime component cannot be resolved.
+
+## 2. Entry Points
+
+### 2.1 Process entry points
+
+These are the top-level runtime entry points for the system:
+
+| Surface | Entry point | Purpose |
+| --- | --- | --- |
+| FastAPI app | `app.main:create_app` | Builds the FastAPI app, installs exception handlers, and mounts routes. |
+| ASGI app object | `app.main:app` | The object used by `uvicorn`. |
+| Celery app | `app.core.celery_app:celery_app` | Declares broker/backend config and registers worker tasks. |
+| Worker task | `app.workers.tasks.run_pipeline_job_task` | Executes a pipeline run job. |
+| Worker task | `app.workers.tasks.run_reindex_job_task` | Executes a reindex job. |
+| Worker task | `app.workers.tasks.run_mineru_job_task` | Executes a MinerU pipeline run on the dedicated queue. |
+| Orchestration function | `app.services.jobs.run_pipeline_job` | Main pipeline execution state machine. |
+| Orchestration function | `app.services.jobs.run_reindex_job` | Rebuilds an index from stored segment artifacts. |
+| Example runner CLI | `scripts/run_pipeline_examples.py` | Runs the example manifest against a remote API. |
+| Example manifest generator | `scripts/generate_pipeline_example_manifest.py` | Regenerates `examples/pipeline_examples/manifest.v1.yaml`. |
+| Parity drift gate | `scripts/check_parity_drift.py` | Checks example profile catalog drift. |
+| Example conformance runner | `scripts/run_example_conformance.py` | Runs example-profile conformance checks. |
+
+Typical local startup commands:
 
 ```bash
-python -c "import importlib.metadata as m; print(m.version('rag-lib'))"
+uv run uvicorn app.main:app --reload
+celery -A app.core.celery_app worker --loglevel=INFO
+uv run python scripts/run_pipeline_examples.py --base-url http://127.0.0.1:8007/api/v1 --run-all
 ```
 
-## 2. Installation
+### 2.2 HTTP API entry points
 
-### 2.1 Base install
+The pipeline-related HTTP surface is in `app/api/routes.py`.
 
-```bash
-git clone https://github.com/your-org/rag-lib.git
-cd rag-lib
-pip install -e .
-```
+Projects:
 
-### 2.2 Optional extras
+- `POST /api/v1/projects`
+- `GET /api/v1/projects`
+- `GET /api/v1/projects/{project_id}`
+- `PATCH /api/v1/projects/{project_id}`
+- `POST /api/v1/projects/{project_id}/archive`
 
-- `rag-lib[miner_u]`: MinerU / Magic-PDF integration
-- `rag-lib[graph]`: Neo4j graph backend support
-- `rag-lib[raptor]`: RAPTOR clustering dependencies
-- `rag-lib[pymupdf]`: PyMuPDF markdown/html loader support
-- `rag-lib[web]`: Playwright browser backend for WebLoader/AsyncWebLoader (compatibility extra)
-- `rag-lib[dev]`: test tooling (`pytest`, `pytest-cov`)
+Pipelines:
 
-Note: `playwright` is currently included in base project dependencies (`pyproject.toml`).
-The `web` extra remains as a compatibility/convenience extra.
+- `POST /api/v1/projects/{project_id}/pipelines`
+- `POST /api/v1/projects/{project_id}/pipelines/validate`
+- `GET /api/v1/projects/{project_id}/pipelines`
+- `GET /api/v1/projects/{project_id}/pipelines/{pipeline_id}`
+- `POST /api/v1/projects/{project_id}/pipelines/{pipeline_id}/copy`
+- `DELETE /api/v1/projects/{project_id}/pipelines/{pipeline_id}`
+- `POST /api/v1/projects/{project_id}/pipelines/{pipeline_id}/runs`
+- `GET /api/v1/projects/{project_id}/pipelines/{pipeline_id}/runs`
 
-Example:
+Jobs:
 
-```bash
-pip install -e ".[miner_u,graph,raptor,pymupdf]"
-```
+- `GET /api/v1/jobs/{job_id}`
+- `POST /api/v1/jobs/{job_id}/cancel`
+- `POST /api/v1/projects/{project_id}/reindex`
 
-## 3. Core Domain Models and Enums
+Artifacts and lineage:
 
-### 3.1 `SegmentType` enum (`rag_lib.core.domain`)
+- `GET /api/v1/projects/{project_id}/pipelines/{pipeline_id}/documents`
+- `GET /api/v1/projects/{project_id}/documents/{artifact_id}`
+- `GET /api/v1/projects/{project_id}/pipelines/{pipeline_id}/segments/{stage_name}`
+- `GET /api/v1/projects/{project_id}/segments/{artifact_id}`
+- `GET /api/v1/projects/{project_id}/pipelines/{pipeline_id}/graph-entities/{stage_name}`
+- `GET /api/v1/projects/{project_id}/graph-entities/{artifact_id}`
+- `GET /api/v1/projects/{project_id}/indices`
+- `GET /api/v1/projects/{project_id}/indices/{artifact_id}`
+- `GET /api/v1/projects/{project_id}/artifacts/{artifact_id}/lineage`
+- `GET /api/v1/projects/{project_id}/artifacts/{artifact_id}/dependents`
+- `GET /api/v1/projects/{project_id}/artifacts/{artifact_id}/lineage/versions`
 
-```python
-SegmentType = {
-    "text",
-    "table",
-    "image",
-    "audio",
-    "code",
-    "other",
+Retrievers:
+
+- `POST /api/v1/projects/{project_id}/retrievers`
+- `GET /api/v1/projects/{project_id}/retrievers`
+- `GET /api/v1/projects/{project_id}/retrievers/{retriever_id}`
+- `DELETE /api/v1/projects/{project_id}/retrievers/{retriever_id}`
+- `POST /api/v1/projects/{project_id}/retrievers/{retriever_id}/init`
+- `POST /api/v1/projects/{project_id}/retrievers/{retriever_id}/query`
+- `POST /api/v1/projects/{project_id}/retrievers/{retriever_id}/release`
+- `GET /api/v1/projects/{project_id}/retrievers/{retriever_id}/results`
+- `GET /api/v1/projects/{project_id}/retrieval-results/{retrieval_result_id}`
+
+Capabilities:
+
+- `GET /api/v1/capabilities`
+
+### 2.3 Manifest authoring entry points
+
+If you are authoring or debugging manifests, these are the most important internal entry points:
+
+- `app.schemas.pipelines.PipelineCreate`
+  - Canonical production pipeline manifest schema.
+- `app.services.pipeline_validator.validate_pipeline`
+  - Structural validation and shape classification.
+- `app.services.pipeline_advisory_validator.validate_pipeline_advisory`
+  - Capability-driven warnings.
+- `app.services.runtime_objects.validate_runtime_object_specs`
+  - Validation for nested `object_type` specs.
+- `scripts.lib.pipeline_example_manifest.load_manifest`
+  - Canonical loader for the example manifest.
+- `scripts.lib.pipeline_example_runner.PipelineExampleRunner`
+  - Canonical executor for example runs.
+
+## 3. Production Pipeline Definition Manifest
+
+### 3.1 Root schema
+
+The production pipeline definition is represented by `app.schemas.pipelines.PipelineCreate`.
+
+Top-level fields:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `name` | `string` | Yes | Pipeline name, unique per project. |
+| `description` | `string \| null` | No | Human-readable description. |
+| `loader` | `LoaderConfig \| null` | Conditionally | File-backed or URL-backed loading source. |
+| `runtime_input` | `RuntimeInputConfig \| null` | Conditionally | Inline documents or segments supplied at run time. |
+| `inputs` | `PipelineInputRef[]` | Conditionally | References to artifacts produced by other pipelines. |
+| `stages` | `PipelineStageConfig[]` | No | Splitter and processor stages. |
+| `indexing` | `IndexingConfig \| null` | No | Index build configuration. |
+| `metadata` | `object` | No | Extra metadata stored in the pipeline definition only. |
+
+Exactly one source model must be used:
+
+- `loader`
+- `runtime_input`
+- non-empty `inputs`
+
+The API rejects:
+
+- manifests with none of those sources
+- manifests with more than one source model at once
+
+### 3.2 Source model: `loader`
+
+`loader` shape:
+
+```json
+{
+  "type": "TextLoader",
+  "params": {}
 }
 ```
-
-### 3.2 `Segment` model (`rag_lib.core.domain.Segment`)
 
 Fields:
 
-- `content: str`
-- `metadata: Dict[str, Any] = {}`
-- `segment_id: Optional[str] = None`
-- `parent_id: Optional[str] = None`
-- `level: int = 0`
-- `path: List[str] = []`
-- `type: SegmentType = SegmentType.TEXT`
-- `original_format: str = "text"`
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `type` | `string` | Yes | Loader class name resolved from `rag_lib.loaders`. |
+| `params` | `object` | No | Loader constructor arguments. |
 
-Method:
+Runtime behavior:
 
-- `to_langchain() -> langchain_core.documents.Document`
+- For file-backed loaders, the run submission must upload a file.
+- For `WebLoader` and `AsyncWebLoader`, the run submission must include `url`.
+- The adapter forces Playwright-backed loaders into headless mode even if the manifest requests visible mode.
 
-### 3.3 Top-level exports (`rag_lib.__init__`)
+The production run endpoint rejects inline file payload shortcuts:
 
-`rag_lib` currently exports:
+- `file_content_b64`
+- `text`
 
-- `Segment`
-- `Indexer`
-- `PDFLoader`
+Those are intentionally unsupported. Use a real file upload or `runtime_input`.
+
+### 3.3 Source model: `runtime_input`
+
+`runtime_input` shape:
+
+```json
+{
+  "alias": "RUNTIME_INPUT",
+  "artifact_kind": "segment"
+}
+```
+
+Fields:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `alias` | `string` | No | Stage alias under which the runtime artifacts are persisted. Defaults to `RUNTIME_INPUT`. |
+| `artifact_kind` | `"document" \| "segment"` | Yes | What the run payload must provide. |
+
+Run payload requirements:
+
+- If `artifact_kind = "document"`, the run payload must include a non-empty `documents` array.
+- If `artifact_kind = "segment"`, the run payload must include a non-empty `segments` array.
+
+The runtime input payload is persisted as normal artifacts before downstream stages run:
+
+- documents become `artifact_kind = "document"`
+- segments become `artifact_kind = "segment"`
+- `stage_name` is the configured alias
+
+### 3.4 Source model: `inputs`
+
+`inputs` is a list of `PipelineInputRef` objects:
+
+```json
+{
+  "alias": "source_chunks",
+  "source_pipeline_id": "pipeline-id",
+  "source_stage_name": "chunks",
+  "artifact_kind": "segment",
+  "pinned_version": 1
+}
+```
+
+Fields:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `alias` | `string` | Yes | Alias by which later stages reference this input. |
+| `source_pipeline_id` | `string` | Yes | Upstream pipeline ID. |
+| `source_stage_name` | `string` | Yes | Upstream stage name. |
+| `artifact_kind` | `"document" \| "segment" \| "index"` | Yes | Requested upstream artifact kind. |
+| `pinned_version` | `integer \| null` | No | Explicit version number; when omitted the latest version per `artifact_key` is used. |
+
+Validation rules:
+
+- input aliases must be unique
+- all input refs must use the same `artifact_kind`
+- if alias `__merged__` is used, it must be the only input alias
+- different entries with the same alias cannot specify different pinned versions
+
+Important runtime limitation:
+
+- The schema accepts `artifact_kind = "index"`.
+- The current executor only materializes input refs for `document` and `segment`.
+- If an input ref uses `index`, pipeline execution fails with an unsupported input-kind error.
+
+In other words, `index` is schema-valid but not currently executable as a pipeline input source.
+
+### 3.5 Stage schema
+
+Each entry in `stages` is a `PipelineStageConfig`:
+
+```json
+{
+  "stage_name": "chunks",
+  "stage_kind": "splitter",
+  "component_type": "RecursiveCharacterTextSplitter",
+  "params": {
+    "chunk_size": 800,
+    "chunk_overlap": 100
+  },
+  "input_aliases": ["LOADING"],
+  "position": 0
+}
+```
+
+Fields:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `stage_name` | `string` | Yes | Unique artifact-producing stage name. |
+| `stage_kind` | `"splitter" \| "processor"` | Yes | Which adapter path to execute. |
+| `component_type` | `string` | Yes | Splitter or processor class name. |
+| `params` | `object` | No | Constructor args. May include nested runtime object specs. |
+| `input_aliases` | `string[]` | No | Upstream aliases to read from. |
+| `position` | `integer >= 0` | Yes | Sort key used by execution. |
+
+Validation and runtime rules:
+
+- stage names must be unique
+- stage names cannot collide with existing source aliases
+- any explicit `input_aliases` must reference known aliases
+- stages are sorted by `position`, not by file order
+- an empty `input_aliases` list is allowed; at runtime it defaults to the immediately previous stage/source alias
+- a stage cannot mix document and segment inputs
+- only `splitter` and `processor` are valid `stage_kind` values
+
+Result contracts:
+
+- splitters may return only segment payloads
+- processors may return document payloads, segment payloads, or `kind = "none"`
+- a processor returning `kind = "none"` may still ask the executor to persist extra artifacts, currently `graph_entity`
+
+### 3.6 Indexing schema
+
+`indexing` shape:
+
+```json
+{
+  "index_type": "chroma",
+  "params": {
+    "embeddings": {
+      "object_type": "create_embeddings_model",
+      "provider": "openai",
+      "model_name": "text-embedding-3-small"
+    },
+    "cleanup": true,
+    "dual_storage": true
+  },
+  "collection_name": "customer_faq",
+  "docstore_name": "customer_faq_docstore"
+}
+```
+
+Fields:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `index_type` | `string` | Yes | Vector store provider name used by `rag_lib.vectors.factory.create_vector_store`. |
+| `params` | `object` | No | Index/runtime build parameters. |
+| `collection_name` | `string \| null` | No | Logical collection name stored in the index artifact metadata. |
+| `docstore_name` | `string \| null` | No | Logical doc store name stored in the index artifact metadata. |
+
+Important indexing rules:
+
+- `indexing.params.embeddings` is mandatory at runtime; legacy `embeddings_provider` and `embeddings_model_name` keys are rejected
+- managed Chroma indexes reject physical storage keys in `params`:
+  - `collection_name`
+  - `doc_store_path`
+- physical storage paths are generated by the API and persisted into the index artifact's `storage` descriptor
+- when `dual_storage = true`, parent segments are resolved and persisted into a local pickle doc store for hydration-aware retrievers
+
+### 3.7 Metadata
+
+`metadata` is stored in the pipeline definition JSON and is not interpreted by the executor. It is safe for custom labeling, ownership tags, or documentation hints, but it does not affect loading, stage execution, or indexing.
+
+## 4. Production Manifest Validation and Shape Classification
+
+### 4.1 Strict validation
+
+`validate_pipeline` performs hard validation and rejects the request on any structural error.
+
+The most important hard checks are:
+
+- exactly one source model must be defined
+- stage names must be unique
+- input aliases must be resolvable
+- runtime object specs must use explicit `object_type`
+- legacy runtime spec keys are forbidden:
+  - `factory`
+  - `__runtime_factory__`
+  - `plugin_ref`
+- `RegexHierarchySplitter.params.patterns` must use object entries like `{ "level": 1, "pattern": "^...$" }`
+- managed Chroma physical storage params are forbidden
+
+### 4.2 Advisory validation
+
+`validate_pipeline_advisory` does not block pipeline creation. It emits warnings based on `GET /api/v1/capabilities` style discovery:
+
+- unknown loader/splitter/processor type
+- unknown params for a discovered component
+- missing required params for a discovered component
+- unknown index type in advisory metadata
+- capability discovery failures
+
+This means a pipeline can be created even if it references a component that is missing from the installed `rag-lib`. In that case:
+
+- pipeline creation succeeds
+- `validation_warnings` is populated
+- the later run fails when the worker cannot resolve or execute the component
+
+### 4.3 Shape strings
+
+The executor stores a derived `shape` string on each pipeline.
+
+Current shape values:
+
+| Shape | Meaning |
+| --- | --- |
+| `full` | loader + stages + indexing |
+| `loading_stages` | loader + stages |
+| `loading_only` | loader only |
+| `runtime_input_stages_indexing` | runtime input + stages + indexing |
+| `runtime_input_stages_only` | runtime input + stages |
+| `input_stages_indexing` | pipeline inputs + stages + indexing |
+| `input_stages_only` | pipeline inputs + stages |
+| `indexing_only` | runtime input or pipeline inputs + indexing, but no stages |
+| `custom` | any remaining valid combination |
+
+## 5. Manifest Runtime Objects, Types, and Enums
+
+### 5.1 Runtime object spec contract
+
+Any manifest params object may contain nested runtime object specs.
+
+Generic shape:
+
+```json
+{
+  "object_type": "create_llm",
+  "provider": "openai",
+  "model_name": "gpt-4.1-nano",
+  "temperature": 0,
+  "streaming": false
+}
+```
+
+Rules:
+
+- runtime object specs can appear anywhere inside `loader.params`, `stage.params`, `indexing.params`, retriever params, and project graph-store config adapters
+- nested runtime object specs are materialized recursively
+- validation only accepts known `object_type` values
+
+### 5.2 Runtime `object_type` values accepted by this repo
+
+The validator currently recognizes these runtime object types:
+
+| `object_type` | Meaning |
+| --- | --- |
+| `create_llm` | Build an LLM instance from `rag_lib.llm.factory.create_llm`. |
+| `create_embeddings_model` | Build an embeddings model from `rag_lib.embeddings.factory.create_embeddings_model`. |
+| `create_graph_store` | Build a graph store from `rag_lib.graph.store.create_graph_store`. |
+| `NetworkXGraphStore` | Instantiate the in-memory graph store class directly. |
+| `GraphQueryConfig` | Instantiate `rag_lib.retrieval.graph_retriever.GraphQueryConfig`. |
+| `LLMTableSummarizer` | Instantiate `rag_lib.summarizers.table_llm.LLMTableSummarizer`. |
+| `WebCleanupConfig` | Instantiate web cleanup/navigation rules. |
+| `PlaywrightNavigationConfig` | Instantiate Playwright navigation-state rules. |
+| `PlaywrightExtractionConfig` | Instantiate Playwright extraction profile chains. |
+| `PlaywrightProfileConfig` | Instantiate one Playwright extraction profile. |
+
+### 5.3 Component type families used in manifests
+
+Static manifests in this repo currently exercise these component names.
+
+Loaders used by the example manifest:
+
+- `TextLoader`
 - `PyMuPDFLoader`
 - `DocXLoader`
+- `CSVLoader`
+- `ExcelLoader`
+- `JsonLoader`
+- `RegexHierarchyLoader`
+- `MinerULoader`
+- `PPTXLoader`
 - `HTMLLoader`
 - `WebLoader`
 - `AsyncWebLoader`
-- `WebCleanupConfig`
-- `WebLink`
-- `PlaywrightExtractionConfig`
-- `PlaywrightNavigationConfig`
-- `PlaywrightProfileConfig`
-- `build_sync_playwright_extractor`
-- `build_async_playwright_extractor`
-- `get_playwright_profile_defaults`
+
+Splitters/chunkers used by the example manifest:
+
+- `RegexSplitter`
+- `TokenTextSplitter`
+- `RecursiveCharacterTextSplitter`
+- `RegexHierarchySplitter`
 - `SemanticChunker`
+- `SentenceSplitter`
+- `CSVTableSplitter`
+- `MarkdownTableSplitter`
+- `JsonSplitter`
+- `QASplitter`
 - `HTMLSplitter`
+
+Processors used by the example manifest:
+
 - `SegmentEnricher`
+- `RaptorProcessor`
+- `EntityExtractor`
 
-## 4. Loaders (`rag_lib.loaders`)
+Retrievers used by the example manifest:
 
-All concrete loader classes listed below return `List[langchain_core.documents.Document]`.
+- `FuzzyRetriever`
+- `RegexRetriever`
+- `GraphRetriever`
+- `create_vector_retriever`
+- `create_bm25_retriever`
+- `create_ensemble_retriever`
+- `create_reranking_retriever`
+- `create_scored_dual_storage_retriever`
 
-### 4.1 Signatures and return behavior
+These lists are not the full theoretical `rag-lib` surface. They are the names actively exercised by the repository's manifests and tests. The complete runtime inventory for the installed library should be read from `GET /api/v1/capabilities`.
 
-#### `PDFLoader` (`rag_lib.loaders.pdf`)
+### 5.4 Nested retriever specs and reserved names
 
-```python
-PDFLoader(
-    file_path: str,
-    parse_mode: str = "text",          # "text" | "table"
-    summarizer: Optional[TableSummarizer] = None,
-    backend: Optional[str] = None,
-)
+Retriever params may recursively embed other retrievers. This matters for composition factories such as `create_ensemble_retriever`.
+
+Nested retriever spec shape:
+
+```json
+{
+  "retriever_type": "create_vector_retriever",
+  "params": {
+    "top_k": 3
+  }
+}
 ```
 
-- `load()` in `text` mode returns one merged text `Document`.
-- `load()` in `table` mode returns one `Document` per extracted table.
-- Raises for invalid `parse_mode` or backend/dependency failures.
+Reserved names with operational meaning:
 
-#### `PyMuPDFLoader` (`rag_lib.loaders.pymupdf`)
+- `LOADING`: reserved alias for loader output
+- `RUNTIME_INPUT`: default alias for runtime-input sources
+- `INPUT_RESOLUTION`: job-stage marker used while resolving pipeline inputs
+- `SEGMENTING`: job-stage marker used while running splitters/processors
+- `INDEXING`: job-stage marker used while building an index
+- `RETRIEVAL_RESULT`: synthetic stage name used for persisted retrieval-hit artifacts
+- `__merged__`: reserved pipeline-input alias that must stand alone if used
 
-```python
-PyMuPDFLoader(file_path: str, output_format: str = "markdown")  # "markdown" | "html"
+### 5.5 Manifest-relevant literal enums
+
+Core pipeline literals enforced directly by this repo:
+
+| Field | Allowed values |
+| --- | --- |
+| `runtime_input.artifact_kind` | `document`, `segment` |
+| `inputs[].artifact_kind` | `document`, `segment`, `index` |
+| `stages[].stage_kind` | `splitter`, `processor` |
+
+Example-manifest literals enforced directly by this repo:
+
+| Field | Allowed values |
+| --- | --- |
+| `input_mode` | `file`, `url`, `documents`, `segments` |
+| `expected_outcome` | `success`, `error` |
+| `retrieval.source.kind` | `index`, `stage` |
+
+Web loader and Playwright literals referenced by pipeline params:
+
+| Field | Allowed values |
+| --- | --- |
+| `SchemaDialect` | `dot_path` |
+| `fetch_mode` | `requests`, `requests_fallback_playwright`, `playwright` |
+| `crawl_scope` | `same_host`, `same_domain`, `allowed_domains`, `allow_all` |
+| `output_format` | `markdown`, `html` |
+| `PlaywrightProfileConfig.profile` | `anchors`, `attributes`, `onclick_regex`, `eval`, `paginated_eval` |
+| `PlaywrightNavigationConfig.navigation_state_document_mode` | `separate_documents`, `single_document` |
+
+Retriever and graph enums referenced by manifest params:
+
+| Field | Allowed values |
+| --- | --- |
+| `SearchType` | `similarity`, `similarity_score_threshold`, `mmr` |
+| `HydrationMode` | `parents_replace`, `children_enriched`, `children_plus_parents` |
+| `GraphQueryConfig.mode` | `local`, `global`, `hybrid`, `mix` |
+| `GraphQueryConfig.vector_relevance_mode` | `strict_0_1`, `normalize_minmax` |
+
+Factory/provider enums commonly used inside runtime object specs:
+
+| Factory | Common values |
+| --- | --- |
+| `create_vector_store.provider` / `index_type` | `chroma`, `faiss`, `qdrant`, `postgres` |
+| `create_embeddings_model.provider` | `openai`, `local`, `huggingface` |
+| `create_llm.provider` | `openai`, `openai_think`, `openai_4`, `openai_pers`, `mistral`, `yandex` |
+| `MinerULoader.parse_mode` | `auto`, `txt`, `ocr` |
+| `MinerULoader.backend` | `pipeline`, `hybrid-auto-engine`, `hybrid-http-client`, `vlm-auto-engine`, `vlm-http-client` |
+| `MinerULoader.source` | `huggingface`, `modelscope`, `local` |
+
+## 6. Production Pipeline Processing
+
+### 6.1 Pipeline creation
+
+When a pipeline is created:
+
+1. The project must be active.
+2. The payload is validated as `PipelineCreate`.
+3. `validate_pipeline` performs hard checks.
+4. `validate_pipeline_advisory` generates warnings.
+5. The immutable pipeline definition is stored in `pipelines.definition`.
+6. `inputs` are expanded into `pipeline_inputs`.
+7. `indexing` is expanded into `pipeline_indexing_config`.
+
+Important properties:
+
+- pipeline definitions are immutable once created
+- deletion is soft (`deleted = true`)
+- copying a pipeline duplicates the stored definition, input refs, and indexing config
+
+### 6.2 Run submission
+
+The run endpoint accepts:
+
+- JSON requests
+- multipart form uploads with:
+  - `form_payload`
+  - `file`
+
+Submission behavior:
+
+- uploaded files are stored temporarily under `local_blob_root/_uploads`
+- the temp file path is injected into the job payload as `uploaded_file_path`
+- the temp file is cleaned up in a `finally` block after execution
+- `example_profile_id` is explicitly rejected by the production API
+
+### 6.3 Job lifecycle
+
+Every run becomes a `Job` row plus `JobEvent` history.
+
+Status values observed in practice:
+
+- `queued`
+- `running`
+- `succeeded`
+- `failed`
+- `canceled`
+
+Stage values used by orchestration:
+
+- `INPUT_RESOLUTION`
+- `LOADING`
+- `SEGMENTING`
+- `INDEXING`
+
+The worker records transitions and emits job events on every state change.
+
+### 6.4 Input resolution
+
+The worker resolves three possible input sources in this order:
+
+1. `inputs` from other pipelines
+2. `runtime_input`
+3. `loader`
+
+Pipeline inputs:
+
+- If `pinned_version` is provided, the exact version is loaded.
+- Otherwise the latest version per `artifact_key` is selected.
+- Resolved upstream artifacts are converted back into document or segment payloads.
+
+Runtime input:
+
+- The worker validates `documents` or `segments` in the run payload.
+- The inline payload is persisted as normal artifacts immediately.
+
+Loader:
+
+- The worker calls `run_loader`.
+- The adapter normalizes file/url arguments.
+- Web loaders are forced headless.
+- Loader diagnostics such as `last_stats` and `last_errors` are copied into `job.result.stage_diagnostics`.
+
+### 6.5 Stage execution
+
+Stages are executed in `position` order.
+
+For each stage:
+
+1. Resolve the effective `input_aliases`.
+2. Gather upstream payloads plus upstream artifact IDs.
+3. Merge `runtime_extras` from upstream outputs into the stage runtime context.
+4. Execute either `run_splitter` or `run_processor`.
+5. Persist the returned artifacts.
+6. Store any diagnostics.
+
+The runtime context may auto-inject these objects into downstream constructors if the target signature supports them:
+
+- `vector_store`
+- `doc_store`
+- `documents`
+- `segments`
+
+No hidden injection happens for:
+
+- `llm`
+- `embeddings`
+- `graph_store`
+- `store`
+
+The only special case is `GraphRetriever`, which may receive a graph store from:
+
+1. index runtime extras
+2. project-level `graph_store_config`
+
+### 6.6 Processor `kind = "none"` and graph entities
+
+Processors may return:
+
+- document payloads
+- segment payloads
+- `kind = "none"`
+
+`kind = "none"` is not a no-op. It means:
+
+- the processor did not return a standard document/segment list
+- it may still return `persisted_artifacts`
+- the executor currently supports persisted `graph_entity` artifacts in this path
+
+### 6.7 Index selection and build
+
+If the pipeline defines `indexing`, the worker builds exactly one index artifact.
+
+Index source selection:
+
+- first choice: the last stage in reverse order whose output kind is `segment`
+- fallback: flatten all segment outputs currently held in memory
+
+Index build behavior:
+
+1. Validate indexing params.
+2. Resolve parent segments if `dual_storage = true`.
+3. Generate a managed storage descriptor.
+4. Materialize embeddings and other runtime objects.
+5. Instantiate vector store and optional doc store.
+6. Call `Indexer.index(...)`.
+7. Persist the index artifact with storage metadata and lineage links.
+
+Logical names vs physical names:
+
+- `collection_name` and `docstore_name` in the manifest are logical labels
+- physical collection names and storage paths are generated by the API
+- those physical descriptors are stored in the index artifact's `storage`
+
+### 6.8 Artifact persistence, versioning, and lineage
+
+Every persisted artifact receives:
+
+- monotonic `version`
+- stable `artifact_key` inside a pipeline/stage/kind scope
+- `ArtifactInput` edges to all upstream artifacts used to create it
+
+Current persisted `artifact_kind` values:
+
+- `document`
+- `segment`
+- `graph_entity`
+- `index`
+
+Artifacts created during retrieval also use `segment`, with `stage_name = "RETRIEVAL_RESULT"` if the system must synthesize a segment artifact for a returned hit that could not be matched back to an existing source artifact.
+
+### 6.9 Failure behavior
+
+Execution fails fast on:
+
+- unknown or unsupported runtime component names
+- empty loader results
+- empty splitter/processor document or segment results
+- mixed document and segment inputs to one stage
+- missing source artifacts
+- missing required runtime input arrays
+
+Error mapping:
+
+- validation problems become `422`
+- not found becomes `404`
+- conflicts become `409`
+- adapter/runtime failures become `503`
+- unknown exceptions become `500`
+
+## 7. Reindexing and Retriever Processing
+
+### 7.1 Reindex flow
+
+`POST /api/v1/projects/{project_id}/reindex` accepts:
+
+```json
+{
+  "source_segments": [
+    {
+      "pipeline_id": "pipeline-id",
+      "stage_name": "chunks",
+      "version": 1
+    }
+  ],
+  "indexing": {
+    "index_type": "chroma",
+    "params": {
+      "embeddings": {
+        "object_type": "create_embeddings_model",
+        "provider": "openai",
+        "model_name": "text-embedding-3-small"
+      }
+    }
+  }
+}
 ```
-
-- Returns one `Document`.
-- Metadata includes `parser`, `output_format`, optional `page_count`.
-- Raises `ValueError` for invalid format and runtime errors for extraction failures.
-
-#### `DocXLoader` (`rag_lib.loaders.docx`)
-
-```python
-DocXLoader(file_path: str)
-```
-
-- Converts DOCX to markdown.
-- Returns one `Document` on success, `[]` on failures.
-- Metadata includes `source_type="docx"`, `output_format="markdown"`.
-
-#### `HTMLLoader` (`rag_lib.loaders.html`)
-
-```python
-HTMLLoader(
-    file_path: str,
-    output_format: Literal["markdown", "html"] = "markdown",
-)
-```
-
-- Strict fail-fast loader (no fallback path).
-- Returns exactly one `Document` on success.
-- Raises on file read, parse, or render errors.
-- Metadata includes `source_type="html"`, `output_format`.
-
-#### `WebLoader` (`rag_lib.loaders.web`)
-
-```python
-WebLoader(
-    url: str,
-    depth: int = 0,
-    output_format: Literal["markdown", "html"] = "markdown",
-    fetch_mode: Literal["requests", "requests_fallback_playwright", "playwright"] = "requests",
-    crawl_scope: Literal["same_host", "same_domain", "allowed_domains", "allow_all"] = "same_host",
-    allowed_domains: Optional[List[str]] = None,
-    login_url: Optional[str] = None,
-    login_processor: Optional[Callable[[page, context, start_url, login_url, current_url], bool | None]] = None,
-    follow_download_links: bool = False,
-    request_timeout_seconds: float = 20.0,
-    playwright_timeout_ms: int = 30000,
-    playwright_headless: bool = True,
-    ignore_https_errors: bool = False,
-    user_agent: str = "rag-lib-webloader/1.0",
-    max_pages: Optional[int] = None,
-    retry_attempts: int = 1,
-    continue_on_error: bool = True,
-    cleanup_config: Optional[WebCleanupConfig] = None,
-    custom_link_extractors: Optional[Sequence[Callable[[document, base_url], Sequence[WebLinkInput] | WebLinkInput | None]]] = None,
-    playwright_link_extractor: Optional[Callable[[page, base_url], Sequence[WebLinkInput] | WebLinkInput | None]] = None,
-    playwright_visible: Optional[bool] = None,
-    playwright_extraction_config: Optional[PlaywrightExtractionConfig] = None,
-    playwright_navigation_config: Optional[PlaywrightNavigationConfig] = None,
-)
-```
-
-Behavior summary:
-
-- Inclusive depth model: start URL is depth `0`.
-- Regular/content links recurse to `depth + 1`.
-- Navigation links recurse at the same depth.
-- `non_recursive_classes` blocks regular links only (navigation links bypass this filter).
-- Returns one `Document` per crawled HTML page or per Playwright navigation state, depending on navigation mode.
-- Optional download routing (`follow_download_links=True`) routes downloadable responses to typed loaders.
-- Login callback runs only for Playwright requests and reuses the same browser context.
-- Diagnostics are available in `last_errors` and `last_stats`.
-
-Parameter reference:
-
-- `url`: crawl entrypoint.
-- `depth`: max inclusive depth. `0` means crawl only the entry URL.
-- `output_format`: rendered HTML output (`"markdown"` or `"html"`).
-- `fetch_mode`:
-  - `"requests"`: plain HTTP fetches only.
-  - `"requests_fallback_playwright"`: requests first, then Playwright fallback on fetch failure/401/403; parse fallback paths also use Playwright.
-  - `"playwright"`: browser-only fetch.
-- `crawl_scope`:
-  - `"same_host"`: exact host match.
-  - `"same_domain"`: registrable-domain match.
-  - `"allowed_domains"`: host must match `allowed_domains`.
-  - `"allow_all"`: no host restriction.
-- `allowed_domains`: host/domain allowlist when `crawl_scope="allowed_domains"`.
-- `login_url`: optional auth URL hint used to detect login pages.
-- `login_processor`: callback `(page, context, start_url, login_url, current_url) -> bool | None`.
-  - `False` means login failed.
-  - `True`/`None` means login flow accepted and crawl continues.
-- `follow_download_links`: if enabled, downloadable resources are routed to existing loaders.
-- `request_timeout_seconds`: per-request timeout for requests backend.
-- `playwright_timeout_ms`: page navigation timeout for Playwright.
-- `playwright_headless`: Playwright browser mode.
-- `ignore_https_errors`: disables TLS cert validation in requests backend and sets Playwright `ignore_https_errors=True` (insecure workaround).
-- `user_agent`: requests and Playwright user-agent value.
-- `max_pages`: optional hard limit for number of visited URLs.
-- `retry_attempts`: retry count per URL and backend.
-- `continue_on_error`:
-  - `True`: keep crawling and record errors.
-  - `False`: raise on first recoverable failure.
-- `cleanup_config`: optional content cleanup/link-filter pipeline:
-  - `ignored_classes`: remove matching nodes before render/extraction.
-  - `non_recursive_classes`: skip recursion for regular links with matching source classes.
-  - `navigation_classes`: class-based navigation sources.
-  - `navigation_styles`: style-snippet navigation sources.
-  - `navigation_texts`: text-marker navigation sources (for example `"<"`, `">"`, `"next"`).
-  - `duplicate_tags`: tag names participating in global duplicate filtering.
-- `custom_link_extractors`: parsed-DOM callbacks run after cleanup.
-- `playwright_link_extractor`: legacy Playwright page callback.
-- `playwright_visible`: alias for headful mode (`True` forces `playwright_headless=False`).
-- `playwright_extraction_config`: declarative Playwright extraction profile chain.
-- `playwright_navigation_config`: generic Playwright navigation runner config.
-
-Supporting config parameter reference:
-
-- `WebLinkInput` accepted by custom/playwright extractors:
-  - `str`: URL.
-  - `WebLink`: structured URL + metadata.
-  - `tuple[str, Sequence[str]]`: URL + source classes.
-- `PlaywrightExtractionConfig` fields:
-  - `profiles`: ordered `PlaywrightProfileConfig` sequence.
-  - `continue_on_error`: if `True`, profile errors are recorded and execution continues.
-  - `max_profile_runtime_ms`: optional wall-clock cap for full profile chain.
-- `PlaywrightProfileConfig` fields:
-  - `profile`: extraction mode (`anchors`, `attributes`, `onclick_regex`, `eval`, `paginated_eval`).
-  - `selectors`: CSS selectors for profile modes that read elements.
-  - `attributes`: attribute names used by `attributes`/`onclick_regex`.
-  - `regex_pattern`: regex for `onclick_regex` value extraction.
-  - `url_template`: interpolation template for regex captures (`{value}` default).
-  - `script`: JavaScript for `eval`.
-  - `script_args`: script argument payload.
-  - `seed_script`: optional pre-loop script for `paginated_eval`.
-  - `next_page_script`: optional page-advance script for `paginated_eval`.
-  - `extract_script`: required extraction script for `paginated_eval`.
-  - `max_pages`: max iterations for `paginated_eval`.
-  - `wait_after_action_ms`: wait after script actions/page changes.
-  - `include_url_patterns`: allowlist regex patterns applied to extracted URLs.
-  - `exclude_url_patterns`: denylist regex patterns applied to extracted URLs.
-  - `is_navigation`: marks extracted links as same-depth navigation links.
-  - `source_tag`: metadata tag hint for extracted links.
-  - `source_classes`: metadata class tokens for extracted links.
-- `PlaywrightNavigationConfig` fields:
-  - `enabled`: enable/disable generic cleanup-driven navigation runner.
-  - `max_clicks`: max click attempts per page.
-  - `max_states`: max captured states per page.
-  - `wait_after_click_ms`: settle wait after a successful click.
-  - `state_change_timeout_ms`: timeout waiting for content hash change.
-  - `state_poll_interval_ms`: poll interval while waiting for state change.
-  - `max_no_change_clicks`: stop after this many no-change clicks.
-  - `clickable_selectors`: candidate selectors for click targets.
-  - `forward_text_markers`: preferred forward labels/tokens.
-  - `backward_text_markers`: de-prioritized backward labels/tokens.
-  - `content_ready_selectors`: optional readiness selectors checked after change.
-  - `navigation_state_document_mode`: state rendering mode (`separate_documents` or `single_document`).
-
-Metadata and diagnostics produced by web crawl:
-
-- HTML docs: `source`, `source_type="web"`, `output_format`, `web_depth`, `parent_url`, `fetch_backend`, `start_url`.
-- Navigation-state docs also include `web_navigation_state_index`, `web_navigation_state_count`, `web_navigation_click_count`, `web_navigation_state_hash`, and `canonical_source`.
-- Download-routed docs include `source_type="web_download"`, `download_content_type`, `download_filename`, `routed_loader`.
-- `last_stats` keys: `visited_count`, `success_count`, `error_count`, `skipped_count`, `max_depth_reached`.
-- `last_errors` entries include `stage` (`fetch`, `parse`, `download`, `auth`, `filter`) and backend details.
-
-Playwright extraction behavior:
-
-- Without `playwright_extraction_config`:
-  - link discovery is mostly HTML-anchor based (`<a href>`) plus optional legacy callback.
-  - useful for static pages and standard links.
-- With `playwright_extraction_config`:
-  - profile chain runs first, then `playwright_link_extractor`.
-  - links are merged/deduped and can carry `is_navigation`, `source_tag`, `source_classes`.
-  - supports dynamic extraction strategies (`attributes`, `onclick_regex`, `eval`, `paginated_eval`).
-
-#### `AsyncWebLoader` (`rag_lib.loaders.web_async`)
-
-```python
-AsyncWebLoader(
-    url: str,
-    depth: int = 0,
-    output_format: Literal["markdown", "html"] = "markdown",
-    fetch_mode: Literal["requests", "requests_fallback_playwright", "playwright"] = "requests",
-    crawl_scope: Literal["same_host", "same_domain", "allowed_domains", "allow_all"] = "same_host",
-    allowed_domains: Optional[List[str]] = None,
-    login_url: Optional[str] = None,
-    login_processor: Optional[Callable[[page, context, start_url, login_url, current_url], Awaitable[bool | None] | bool | None]] = None,
-    follow_download_links: bool = False,
-    request_timeout_seconds: float = 20.0,
-    playwright_timeout_ms: int = 30000,
-    playwright_headless: bool = True,
-    ignore_https_errors: bool = False,
-    user_agent: str = "rag-lib-webloader/1.0",
-    max_pages: Optional[int] = None,
-    retry_attempts: int = 1,
-    max_concurrency: int = 5,
-    continue_on_error: bool = True,
-    cleanup_config: Optional[WebCleanupConfig] = None,
-    custom_link_extractors: Optional[Sequence[Callable[[document, base_url], Awaitable[Sequence[WebLinkInput]] | Sequence[WebLinkInput] | WebLinkInput | Awaitable[WebLinkInput] | None]]] = None,
-    playwright_link_extractor: Optional[Callable[[page, base_url], Awaitable[Sequence[WebLinkInput]] | Sequence[WebLinkInput] | WebLinkInput | Awaitable[WebLinkInput] | None]] = None,
-    playwright_visible: Optional[bool] = None,
-    playwright_extraction_config: Optional[PlaywrightExtractionConfig] = None,
-    playwright_navigation_config: Optional[PlaywrightNavigationConfig] = None,
-)
-```
-
-Async-specific behavior:
-
-- Same parameters and semantics as `WebLoader`, except:
-  - `login_processor` may be sync or async.
-  - `custom_link_extractors` and `playwright_link_extractor` may be sync or async.
-  - `max_concurrency` controls concurrent URL processing.
-- Crawl execution uses depth waves:
-  - process current depth concurrently;
-  - exhaust same-depth navigation waves;
-  - then advance to `depth + 1` with regular links.
-
-Examples:
-
-1. Basic static crawl (`requests` only):
-
-```python
-loader = WebLoader(
-    url="https://example.com",
-    depth=1,
-    fetch_mode="requests",
-    output_format="markdown",
-)
-docs = loader.load()
-```
-
-2. Requests first, Playwright fallback, cleanup rules:
-
-```python
-loader = WebLoader(
-    url="https://quotes.toscrape.com",
-    depth=2,
-    fetch_mode="requests_fallback_playwright",
-    cleanup_config=WebCleanupConfig(
-        non_recursive_classes=("tag",),
-        navigation_classes=("pager",),
-        ignored_classes=("footer",),
-    ),
-)
-docs = loader.load()
-```
-
-3. Playwright extraction profiles enabled (dynamic links):
-
-```python
-profile = PlaywrightProfileConfig(
-    profile="attributes",
-    selectors=("[data-url]",),
-    attributes=("data-url",),
-)
-loader = AsyncWebLoader(
-    url="https://site-with-js-links.example",
-    depth=1,
-    fetch_mode="playwright",
-    playwright_extraction_config=PlaywrightExtractionConfig(profiles=(profile,)),
-)
-docs = await loader.load()
-```
-
-4. Playwright extraction disabled (default):
-
-```python
-loader = AsyncWebLoader(
-    url="https://site-with-js-links.example",
-    depth=1,
-    fetch_mode="playwright",
-)
-# This path relies on HTML anchors and cleanup/navigation signals only.
-docs = await loader.load()
-```
-
-#### `CSVLoader` (`rag_lib.loaders.csv_excel`)
-
-```python
-CSVLoader(
-    file_path: str,
-    output_format: Literal["markdown", "csv"] = "markdown",
-    delimiter: Optional[str] = None,
-)
-```
-
-- Returns one `Document`.
-- Auto-detects delimiter when omitted.
-- Metadata includes `row_count`, `delimiter`, `output_format`.
-
-#### `ExcelLoader` (`rag_lib.loaders.csv_excel`)
-
-```python
-ExcelLoader(
-    file_path: str,
-    output_format: Literal["markdown", "csv"] = "markdown",
-    delimiter: str = ",",
-    summarizer: Optional[TableSummarizer] = None,
-)
-```
-
-- Returns one `Document` per sheet.
-- Metadata includes `sheet_name`, `row_count`, `output_format`.
-
-#### `RegexHierarchyLoader` (`rag_lib.loaders.regex`)
-
-```python
-RegexHierarchyLoader(
-    file_path: str,
-    patterns: Union[List[Tuple[int, str]], List[Dict]],
-    exclude_patterns: Optional[List[str]] = None,
-    include_parent_content: Union[bool, int] = False,
-)
-```
-
-- Current behavior: loader returns raw file text as a single `Document`.
-- Hierarchical splitting is done by `RegexHierarchySplitter`, not this loader.
-- Backward-compat helper is present: `load_str(text: str) -> List[Document]`.
-
-#### `TableLoader` (`rag_lib.loaders.data_loaders`)
-
-```python
-TableLoader(file_path: str)
-```
-
-- Reads CSV-like data and renders one markdown table `Document`.
-- Returns `[]` on failures.
-
-#### `JsonLoader` (`rag_lib.loaders.data_loaders`)
-
-```python
-JsonLoader(
-    file_path: str,
-    output_format: Literal["json", "markdown"] = "json",
-    schema: str = ".",
-    schema_dialect: SchemaDialect = SchemaDialect.DOT_PATH,
-    ensure_ascii: bool = False,
-)
-```
-
-- Supports schema selection with dot-path traversal.
-- Returns one `Document` or `[]` when path cannot be resolved / parsing fails.
-
-#### `TextLoader` (`rag_lib.loaders.data_loaders`)
-
-```python
-TextLoader(file_path: str)
-```
-
-- Returns one plain text `Document` or `[]` on failure.
-
-#### `MinerULoader` (`rag_lib.loaders.miner_u`)
-
-```python
-MinerULoader(
-    file_path: str,
-    parse_mode: str = "auto",          # "auto" | "txt" | "ocr"
-    backend: Optional[str] = None,      # see enum below
-    lang: Optional[str] = None,
-    server_url: Optional[str] = None,
-    start_page: Optional[int] = None,
-    end_page: Optional[int] = None,
-    parse_formula: Optional[bool] = None,
-    parse_table: Optional[bool] = None,
-    device: Optional[str] = None,
-    vram: Optional[int] = None,
-    source: Optional[str] = None,       # "huggingface" | "modelscope" | "local"
-    timeout_seconds: int = 600,
-    keep_temp_artifacts: bool = False,
-)
-```
-
-- Returns one markdown `Document` per PDF.
-- Validates parameter ranges and enum-like values.
-- Raises `ImportError` if MinerU is unavailable.
-
-### 4.2 Loader enums
-
-#### `SchemaDialect` (`rag_lib.loaders.data_loaders`)
-
-```python
-SchemaDialect = {"dot_path"}
-```
-
-#### Web crawl literals (`rag_lib.loaders.web`, `rag_lib.loaders.web_async`)
-
-```python
-FetchMode = {"requests", "requests_fallback_playwright", "playwright"}
-CrawlScope = {"same_host", "same_domain", "allowed_domains", "allow_all"}
-output_format = {"markdown", "html"}  # for WebLoader/AsyncWebLoader/HTMLLoader
-```
-
-#### Playwright extraction literals (`rag_lib.loaders.web_playwright_extractors`)
-
-```python
-PlaywrightProfileName = {"anchors", "attributes", "onclick_regex", "eval", "paginated_eval"}
-NavigationStateDocumentMode = {"separate_documents", "single_document"}
-```
-
-`PlaywrightProfileName` value meaning:
-
-- `anchors`: extract URLs from selected anchors (`href`).
-- `attributes`: extract URLs from configured attributes (for example `data-url`, `data-href`).
-- `onclick_regex`: extract URL-like values from attributes/text via regex.
-- `eval`: evaluate one custom JavaScript extraction script.
-- `paginated_eval`: iterative extraction across pages/states via `seed_script`, `extract_script`, `next_page_script`.
-
-`NavigationStateDocumentMode` value meaning:
-
-- `separate_documents`: emit one `Document` per captured navigation state (`#nav-state=N` source suffix).
-- `single_document`: merge all captured states into one combined document.
-
-#### Download routing kinds (internal mapping in `web_common`)
-
-```python
-download_kind = {"pdf", "docx", "html", "csv", "xlsx", "json", "txt"}
-```
-
-Default routed loaders by kind:
-
-- `pdf` -> `PDFLoader` (fallback: `PyMuPDFLoader`)
-- `docx` -> `DocXLoader`
-- `html` -> `HTMLLoader`
-- `csv` -> `CSVLoader`
-- `xlsx` -> `ExcelLoader`
-- `json` -> `JsonLoader`
-- `txt` -> `TextLoader`
-
-## 5. Chunkers and Splitters (`rag_lib.chunkers`)
-
-### 5.1 Base contract
-
-`TextSplitter` base class exposes:
-
-- `split_text(text: str) -> List[str]`
-- `create_segments(text: str, metadata: Optional[Dict[str, Any]] = None) -> List[Segment]`
-- `split_documents(documents: Iterable[Document]) -> List[Segment]`
-- `split_segments(segments: Iterable[Segment]) -> List[Segment]`
-
-### 5.2 Concrete classes and parameter signatures
-
-#### `SemanticChunker`
-
-```python
-SemanticChunker(
-    embeddings: Embeddings,
-    threshold: Optional[float] = None,
-    window_size: int = 1,
-    language: str = "auto",
-    threshold_type: str = "fixed",          # "fixed" | "percentile" | "percentile_local"
-    percentile_threshold: int = 90,
-    local_percentile_window: int = 50,
-    local_min_samples: int = 20,
-    local_fallback: str = "global",         # "global" | "fixed"
-    enable_debug: bool = False,
-)
-```
-
-- Adds debug accessors: `get_last_debug_info()` and `get_split_boundary_for_chunk(...)`.
-
-#### `RecursiveCharacterTextSplitter`
-
-```python
-RecursiveCharacterTextSplitter(
-    chunk_size: int = 4000,
-    chunk_overlap: int = 200,
-    length_function: Callable[[str], int] = len,
-    separators: Optional[List[str]] = None,
-    keep_separator: bool = False,
-    is_separator_regex: bool = False,
-)
-```
-
-#### `TokenTextSplitter`
-
-```python
-TokenTextSplitter(
-    chunk_size: int = 4000,
-    chunk_overlap: int = 200,
-    length_function: Callable[[str], int] = len,
-    model_name: str = "cl100k_base",
-    encoding_name: Optional[str] = None,
-)
-```
-
-#### `SentenceSplitter`
-
-```python
-SentenceSplitter(
-    chunk_size: int = 4000,
-    chunk_overlap: int = 200,
-    length_function: Callable[[str], int] = len,
-    language: str = "auto",
-)
-```
-
-#### `RegexSplitter`
-
-```python
-RegexSplitter(
-    pattern: str,
-    chunk_size: int = 4000,
-    chunk_overlap: int = 200,
-    length_function: Callable[[str], int] = len,
-)
-```
-
-#### `RegexHierarchySplitter`
-
-```python
-RegexHierarchySplitter(
-    patterns: Union[List[Tuple[int, str]], List[Dict]],
-    exclude_patterns: Optional[List[str]] = None,
-    include_parent_content: Union[bool, int] = False,
-)
-```
-
-#### `MarkdownHierarchySplitter`
-
-```python
-MarkdownHierarchySplitter(
-    exclude_code_blocks: bool = True,
-    include_parent_content: Union[bool, int] = False,
-)
-```
-
-#### `JsonSplitter`
-
-```python
-JsonSplitter(
-    min_chunk_size: int = 0,
-    schema: str = ".",
-    schema_dialect: SchemaDialect = SchemaDialect.DOT_PATH,
-    ensure_ascii: bool = False,
-    metadata_value_max_len: Optional[int] = 256,
-)
-```
-
-#### `QASplitter`
-
-```python
-QASplitter()
-```
-
-#### `MarkdownTableSplitter`
-
-```python
-MarkdownTableSplitter(
-    *,
-    split_table_rows: bool = False,
-    use_first_row_as_header: bool = True,
-    max_rows_per_chunk: Optional[int] = None,
-    max_chunk_size: Optional[int] = None,
-    summarizer: Optional[TableSummarizer] = None,
-    summarize_table: bool = True,
-    summarize_chunks: bool = False,
-    inject_summaries_into_content: bool = False,
-)
-```
-
-#### `CSVTableSplitter`
-
-```python
-CSVTableSplitter(
-    max_rows_per_chunk: Optional[int] = None,
-    max_chunk_size: Optional[int] = None,
-    delimiter: Optional[str] = None,
-    use_first_row_as_header: bool = True,
-    summarizer: Optional[TableSummarizer] = None,
-    summarize_table: bool = True,
-    summarize_chunks: bool = False,
-    inject_summaries_into_content: bool = False,
-    length_function: Callable[[str], int] = len,
-)
-```
-
-#### `HTMLSplitter`
-
-```python
-HTMLSplitter(
-    output_format: Literal["markdown", "html"] = "markdown",
-    split_table_rows: bool = False,
-    use_first_row_as_header: bool = True,
-    max_rows_per_chunk: Optional[int] = None,
-    max_chunk_size: Optional[int] = None,
-    summarizer: Optional[TableSummarizer] = None,
-    summarize_table: bool = True,
-    summarize_chunks: bool = False,
-    inject_summaries_into_content: bool = False,
-    include_parent_content: Union[bool, int] = False,
-)
-```
-
-- Splits by HTML heading hierarchy (`h1..h6`), preserving lists and tables.
-- Emits separate `SegmentType.TABLE` chunks for `<table>`.
-- Supports row chunking and summary metadata parity with markdown/csv table splitters.
-- Strict fail-fast behavior: parse/render/table/summarizer errors are raised.
-
-## 6. Processors and Indexing
-
-### 6.1 Processors (`rag_lib.processors`)
-
-#### `SegmentEnricher`
-
-```python
-SegmentEnricher(llm: BaseChatModel)
-```
-
-- `enrich(segments: List[Segment]) -> List[Segment]`
-- `aenrich(segments: List[Segment]) -> List[Segment]`
-- Injects `generated_title`, `keywords`, and `summary` into metadata.
-
-#### `EntityExtractor`
-
-```python
-EntityExtractor(llm: BaseChatModel, store: BaseGraphStore)
-```
-
-- `process_segments(segments: List[Segment]) -> None`
-- `aprocess_segments(segments: List[Segment], concurrency: int = 5) -> None`
-
-#### `CommunitySummarizer`
-
-```python
-CommunitySummarizer(llm: BaseChatModel, store: BaseGraphStore)
-```
-
-- `summarize(communities: Dict[int, List[str]]) -> List[Segment]`
-
-#### `RaptorProcessor`
-
-```python
-RaptorProcessor(
-    llm: BaseChatModel,
-    embeddings: Embeddings,
-    max_levels: int = 3,
-    clustering_service: Optional[ClusteringService] = None,
-    summary_prompt_template: str | None = None,
-)
-```
-
-- `process_segments(segments: List[Segment]) -> List[Segment]`
-- `aprocess_segments(segments: List[Segment]) -> List[Segment]`
-
-### 6.2 `Indexer` (`rag_lib.core.indexer`)
-
-```python
-Indexer(
-    vector_store: VectorStore,
-    embeddings: Embeddings,
-    enricher: Optional[SegmentEnricher] = None,
-    entity_extractor: Optional[EntityExtractor] = None,
-    doc_store: Optional[BaseStore[str, Any]] = None,
-)
-```
-
-Methods:
-
-- `index(segments: List[Segment], parent_segments: Optional[List[Segment]] = None, batch_size: int = 100) -> None`
-- `aindex(segments: List[Segment], parent_segments: Optional[List[Segment]] = None, batch_size: int = 100) -> None`
 
 Behavior:
 
-- Optional enrichment before indexing.
-- Optional graph extraction during indexing.
-- Optional dual-storage hydration support via `doc_store`.
+- only segment artifacts are loaded
+- parent-segment hydration is resolved when `dual_storage = true`
+- the new index artifact is project-scoped and not tied to a pipeline
 
-## 7. Retrieval (`rag_lib.retrieval`)
+### 7.2 Retriever creation
 
-### 7.1 Atomic retrievers/factories (`retrievers.py`)
+A retriever can be created from exactly one source:
 
-```python
-RegexRetriever(documents: List[Union[Document, Segment]])
-FuzzyRetriever(documents: List[Union[Document, Segment]], threshold: int = 80, mode: str = "partial_ratio")
+- `index_artifact_id`
+- `source_artifact_ids`
 
-create_vector_retriever(
-    vector_store: VectorStore,
-    top_k: int = 4,
-    search_type: str = "similarity",      # similarity | mmr | similarity_score_threshold
-    score_threshold: Optional[float] = None,
-) -> BaseRetriever
+Direct source artifacts must be homogeneous:
 
-create_bm25_retriever(
-    documents: List[Union[Document, Segment]],
-    top_k: int = 4,
-) -> BM25Retriever
+- all documents
+- or all segments
+- or all graph entities
 
-create_graph_retriever(
-    vector_store: Optional[VectorStore],
-    graph_store: Any,
-    config: Optional[Any] = None,
-    embedder: Optional[Embeddings] = None,
-    llm: Optional[BaseChatModel] = None,
-    doc_store: Optional[BaseStore[str, Document]] = None,
-    id_key: str = "segment_id",
-) -> BaseRetriever
+The retriever runtime is cached in memory. If an index-backed retriever is created and the in-memory runtime is missing, the system attempts to restore the index runtime from the index artifact plus its lineage.
+
+### 7.3 Query execution
+
+The API query contract intentionally does not expose `top_k` on the query request body. `top_k` belongs in the retriever's creation params.
+
+Returned score fields are normalized from:
+
+- `score`
+- `rerank_score`
+- `similarity_score`
+- `fuzzy_score`
+- `max_similarity_score`
+
+## 8. Example Runner Manifest
+
+### 8.1 Root schema
+
+The example manifest is loaded by `scripts.lib.pipeline_example_manifest.load_manifest`.
+
+Root shape:
+
+```yaml
+version: v2
+examples:
+  - example_id: 01_text_basic
+    source_example_file: 01_text_basic.py
+    input_mode: file
+    input_spec:
+      file: terms&defs.txt
+    project_create_payload: {}
+    runs:
+      - run_name: main
+        pipeline_create_payload:
+          ...
+        run_payload_template: {}
+        retrievals: []
+    expected_outcome: success
+    notes: Pipeline-only API example parity with rag-lib.
 ```
 
-### 7.2 Composition factories (`composition.py`)
+Root fields:
 
-```python
-create_ensemble_retriever(retrievers: List[BaseRetriever], weights: Optional[List[float]] = None) -> BaseRetriever
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `version` | `string` | Yes | Manifest format version. Current value is `v2`. |
+| `examples` | `PipelineExampleSpec[]` | Yes | Ordered list of runnable examples. |
 
-create_dual_storage_retriever(
-    vector_store: VectorStore,
-    doc_store: BaseStore[str, Document],
-    id_key: str = "segment_id",
-    search_kwargs: Optional[Dict[str, Any]] = None,
-) -> MultiVectorRetriever
+### 8.2 `PipelineExampleSpec`
 
-create_scored_dual_storage_retriever(
-    vector_store: VectorStore,
-    doc_store: BaseStore[str, Document],
-    id_key: str = "segment_id",
-    search_kwargs: Optional[Dict[str, Any]] = None,
-    search_type: SearchType = SearchType.similarity,
-    score_threshold: float | None = None,
-    hydration_mode: HydrationMode = HydrationMode.parents_replace,
-    enrichment_separator: str = "\n\n--- MATCHED CHILD CHUNK ---\n\n",
-) -> BaseRetriever
+Fields:
 
-create_reranking_retriever(
-    base_retriever_or_list: Union[BaseRetriever, List[BaseRetriever]],
-    reranker_model: Union[str, BaseCrossEncoder] = "BAAI/bge-reranker-base",
-    top_k: int = 5,
-    max_score_ratio: float = 0.0,
-    device: str = "cpu",
-) -> ContextualCompressionRetriever
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `example_id` | `string` | Yes | Unique manifest ID. |
+| `source_example_file` | `string` | Yes | Source example file name from the upstream example corpus. |
+| `input_mode` | `file \| url \| documents \| segments` | Yes | How runtime input is provided. |
+| `input_spec` | `object` | Yes | Input-mode-specific payload. |
+| `project_create_payload` | `object` | No | Optional project payload, for example graph store config. |
+| `runs` | `PipelineRunSpec[]` | Yes | One or more pipeline variants for the example. |
+| `expected_outcome` | `success \| error` | Yes | Whether the overall example should pass or intentionally fail. |
+| `notes` | `string` | Yes | Free-form notes. |
 
-create_graph_hybrid_retriever(
-    vector_retriever: BaseRetriever,
-    graph_retriever: BaseRetriever,
-    weights: List[float] = [0.7, 0.3],
-) -> EnsembleRetriever
+Validation rules:
+
+- `example_id` must be unique
+- `runs` must be present and non-empty
+- `input_mode` must be one of the four supported literals
+- `expected_outcome` must be `success` or `error`
+
+### 8.3 `input_spec` by `input_mode`
+
+`input_mode = file`
+
+```yaml
+input_mode: file
+input_spec:
+  file: statement.pdf
 ```
 
-Behavior note:
+Behavior:
 
-- `create_dual_storage_retriever(...)` currently builds `MultiVectorRetriever` with fixed `search_type="similarity_score_threshold"` and `search_kwargs` passthrough.
+- path is resolved relative to `--example-docs-root`
+- escaping that root is rejected
+- the runner injects `upload_file_path` and `file_name` into the run payload
 
-### 7.3 `ScoredMultiVectorRetriever` enums and defaults (`scored_retriever.py`)
+`input_mode = url`
 
-#### `SearchType`
-
-```python
-SearchType = {
-    "similarity",
-    "similarity_score_threshold",
-    "mmr",
-}
+```yaml
+input_mode: url
+input_spec:
+  url: https://example.com
 ```
 
-#### `HydrationMode`
+Behavior:
 
-```python
-HydrationMode = {
-    "parents_replace",
-    "children_enriched",
-    "children_plus_parents",
-}
+- the runner injects `url` into the run payload
+
+`input_mode = documents`
+
+```yaml
+input_mode: documents
+input_spec:
+  documents:
+    - content: Hello
+      metadata: {}
 ```
 
-#### Constructor fields
+Behavior:
 
-```python
-ScoredMultiVectorRetriever(
-    vector_store: VectorStore,
-    byte_store: ByteStore | None = None,
-    doc_store: BaseStore[str, Document],
-    id_key: str = "doc_id",
-    search_kwargs: dict = {},
-    search_type: SearchType = SearchType.similarity,
-    score_threshold: float | None = None,
-    hydration_mode: HydrationMode = HydrationMode.parents_replace,
-    enrichment_separator: str = "\n\n--- MATCHED CHILD CHUNK ---\n\n",
-)
+- records are deep-copied into the run payload under `documents`
+
+`input_mode = segments`
+
+```yaml
+input_mode: segments
+input_spec:
+  segments:
+    - content: Hello
+      metadata: {}
+      segment_id: seg-1
 ```
 
-Note: factory `create_scored_dual_storage_retriever(...)` defaults `id_key` to `"segment_id"`, overriding the class-level default.
+Behavior:
 
-## 8. Graph RAG
+- records are deep-copied into the run payload under `segments`
 
-### 8.1 Graph domain (`rag_lib.graph`)
+### 8.4 `project_create_payload`
 
-#### `GraphNode`
+This is passed directly to `POST /projects`.
 
-```python
-GraphNode(
-    id: str,
-    type: str,
-    label: str,
-    description: Optional[str] = None,
-    properties: Dict[str, Any] = {},
-    source_segment_id: Optional[str] = None,
-)
+The main current advanced use is project-level graph store configuration:
+
+```yaml
+project_create_payload:
+  graph_store_config:
+    provider: neo4j
+    params:
+      uri: bolt://neo4j:7687
+      username: neo4j
+      password: neo4j_password
+      database: neo4j
 ```
 
-#### `GraphEdge`
+### 8.5 `PipelineRunSpec`
 
-```python
-GraphEdge(
-    source_id: str,
-    target_id: str,
-    relation_type: str,
-    weight: float = 1.0,
-    properties: Dict[str, Any] = {},
-    source_segment_id: Optional[str] = None,
-)
+Fields:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `run_name` | `string` | Yes | Variant name, used in snapshot filenames and result grouping. |
+| `pipeline_create_payload` | `object` | Yes | Production pipeline definition payload. |
+| `run_payload_template` | `object` | No | Extra request payload merged before input injection. |
+| `retrievals` | `RetrievalPlan[]` | No | Retrieval checks to run after a successful pipeline run. |
+
+Important detail:
+
+- `pipeline_create_payload` is the production API manifest described in Sections 3 through 7.
+- The example manifest does not define a second pipeline schema; it embeds the production one.
+
+### 8.6 `RetrievalPlan`
+
+Fields:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `name` | `string` | Yes | Retrieval scenario name. |
+| `source.kind` | `index \| stage` | Yes | Whether the retriever is created from the run's first index artifact or from artifacts produced by one named stage. |
+| `source.stage_name` | `string` | Required when `source.kind = stage` | Stage to use as retriever source. |
+| `create.retriever_type` | `string` | Yes | Retriever or retriever-factory name. |
+| `create.params` | `object` | No | Retriever creation params. |
+| `requires_session` | `boolean` | No | Whether the runner must call `init` and `release` around queries. |
+| `queries` | `RetrievalQueryPlan[]` | Yes | Queries to execute against the created retriever. |
+
+### 8.7 `RetrievalQueryPlan`
+
+Fields:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `name` | `string` | Yes | Snapshot-scoping name. |
+| `query` | `string` | Yes | Query text sent to the API. |
+| `top_k` | `integer` | Yes | Declared expectation/documentation field in the manifest. |
+| `strict_match` | `boolean` | Yes | Whether missing artifacts or query failures should fail the example. |
+
+Important detail:
+
+- `top_k` is currently not sent to `POST /retrievers/{id}/query`.
+- The runner sends only `query` and optional `session_id`.
+- Effective top-k behavior must therefore be set in `create.params`, not here.
+
+### 8.8 Example IDs currently defined
+
+Current manifest examples:
+
+- `01_text_basic`
+- `02_markdown_enrichment`
+- `02_markdown_enrichment_vector`
+- `03_pdf_semantic`
+- `04_pdf_raptor`
+- `05_docx_graph`
+- `06_docx_regex`
+- `07_csv_table_summary`
+- `07_md_table_summary`
+- `08_excel_csv_basic`
+- `08_excel_md_basic`
+- `09_json_hybrid`
+- `10_text_ensemble`
+- `11_log_regex_loader`
+- `12_qa_loader`
+- `13_dual_storage`
+- `14_mineru_pdf`
+- `15_pptx_unsupported`
+- `16_html_html`
+- `16_html_md`
+- `17A_web_loader_plantpad`
+- `17B_web_loader_quotes`
+- `17C_web_loader_example`
+- `17_web_loader`
+
+## 9. Example Manifest Processing
+
+### 9.1 Selection flow
+
+`scripts/run_pipeline_examples.py` uses this precedence:
+
+1. `--run-all`
+2. `--examples`
+3. default interactive selection
+
+### 9.2 Per-example execution flow
+
+For each example:
+
+1. Create the project from `project_create_payload`.
+2. For each `run`:
+   - create the pipeline from `pipeline_create_payload`
+   - build the run payload from `run_payload_template + input_mode/input_spec`
+   - submit the run
+   - poll `GET /jobs/{job_id}` until terminal state
+   - export documents, stage artifacts, graph entities, and indices
+   - execute any retrieval plans
+3. Write per-example `summary.json`.
+
+### 9.3 Snapshot layout
+
+Results are exported under:
+
+```text
+results/pipeline_examples/<timestamp>/
 ```
 
-Stores:
-
-- `NetworkXGraphStore()` (in-memory)
-- `Neo4jGraphStore(uri: str, auth: tuple[str, str], database: str = "neo4j")`
-
-### 8.2 `GraphQueryConfig` (`rag_lib.retrieval.graph_retriever`)
-
-```python
-GraphQueryConfig(
-    mode: Literal["local", "global", "hybrid", "mix"] = "hybrid",
-    top_k_entities: int = 12,
-    top_k_relations: int = 24,
-    top_k_chunks: int = 10,
-    max_hops: int = 2,
-    min_score: float = 0.15,
-    use_rerank: bool = True,
-    enable_keyword_extraction: bool = True,
-    vector_relevance_mode: Literal["strict_0_1", "normalize_minmax"] = "strict_0_1",
-    token_budget_total: int = 3500,
-    token_budget_entities: int = 700,
-    token_budget_relations: int = 900,
-    token_budget_chunks: int = 1900,
-)
-```
-
-### 8.3 `GraphRetriever` constructor fields
-
-```python
-GraphRetriever(
-    vector_store: Optional[VectorStore] = None,
-    graph_store: BaseGraphStore,
-    config: GraphQueryConfig = GraphQueryConfig(),
-    embedder: Optional[Embeddings] = None,
-    llm: Optional[BaseChatModel] = None,
-    doc_store: Optional[BaseStore[str, Document]] = None,
-    id_key: str = "segment_id",
-)
-```
-
-Runtime contract:
-
-- `vector_store` is required in strict mode (validated at runtime).
-- If `enable_keyword_extraction=True`, `llm` with `with_structured_output(...)` is required.
-
-Public methods:
-
-- `retrieve(query: str, top_k: Optional[int] = None) -> List[Document]`
-- `aretrieve(query: str, top_k: Optional[int] = None) -> List[Document]`
-- `.invoke(...)` / `.ainvoke(...)` are supported via `BaseRetriever`.
-
-### 8.4 Graph retriever returned metadata contract
-
-Each returned `Document` includes:
-
-- `retrieval_kind`: one of `chunk`, `entity`, `relation`, `community`
-- `score`: normalized float in `[0.0, 1.0]`
-- `graph_mode`: one of `local`, `global`, `hybrid`, `mix`
-- `source_segment_id` when available
-- `entity_id` for entity hits
-- `edge_id` for relation hits
-- `community_id` for community hits
-
-### 8.5 Graph retriever strict exceptions
-
-- `GraphConfigurationError`
-- `GraphCapabilityError`
-- `GraphDataError`
-
-## 9. MinerU Detailed Parameters and Enums
-
-### 9.1 `parse_mode` enum-like values
-
-```python
-{"auto", "txt", "ocr"}
-```
-
-### 9.2 `backend` enum-like values
-
-```python
-{
-  "pipeline",
-  "hybrid-auto-engine",
-  "hybrid-http-client",
-  "vlm-auto-engine",
-  "vlm-http-client",
-}
-```
-
-### 9.3 `source` enum-like values
-
-```python
-{"huggingface", "modelscope", "local"}
-```
-
-### 9.4 Return metadata keys from `MinerULoader.load()`
-
-Always present:
-
-- `source`
-- `parser = "MinerU"`
-- `output_format = "markdown"`
-- `mineru_parse_mode`
-- `mineru_command`
-
-Conditionally present:
-
-- `mineru_backend`
-- `lang`
-- `mineru_source`
-- `start_page`
-- `end_page`
-
-## 10. RAPTOR (`rag_lib.raptor` + `rag_lib.processors.raptor`)
-
-### 10.1 Components and current constructor parameters
-
-#### `ClusteringService`
-
-```python
-ClusteringService()
-```
-
-#### `ClusterSummarizer`
-
-```python
-ClusterSummarizer(
-    llm: BaseChatModel,
-    summary_prompt_template: str | None = None,
-)
-```
-
-Methods:
-
-- `summarize(texts: List[str], *, target_language="english", max_chars=1200, target_ratio=0.35) -> str`
-- `asummarize(texts: List[str], *, target_language="english", max_chars=1200, target_ratio=0.35) -> str`
-
-#### `TreeBuilder`
-
-```python
-TreeBuilder(
-    clustering_service: ClusteringService,
-    summarizer: ClusterSummarizer,
-    embeddings_model: Embeddings,
-    summary_target_ratio: float = 0.35,
-    summary_max_chars: int = 1200,
-    summary_min_chars: int = 120,
-    summary_preserve_language: bool = True,
-    strict_quality: bool = True,
-)
-```
-
-Methods:
-
-- `build(segments: List[Segment], n_levels: int = 3) -> List[Segment]`
-- `abuild(segments: List[Segment], n_levels: int = 3) -> List[Segment]`
-
-### 10.2 RAPTOR segment metadata emitted by `TreeBuilder`
-
-Summary segments include keys such as:
-
-- `raptor_level`
-- `raptor_cluster_id`
-- `raptor_child_ids`
-- `is_raptor_summary`
-- `raptor_summary_chars`
-- `raptor_children_chars`
-- `raptor_compression_ratio`
-- `raptor_summary_language`
-- `raptor_summary_max_chars`
-- `raptor_summary_exceeds_max_chars`
-
-After hierarchy finalization additional keys may include:
-
-- `raptor_parent_ids`
-- `raptor_depth_from_root`
-
-## 11. Configuration (`rag_lib.config`)
-
-`Settings` structure:
-
-- `llm: LLMSettings` (`LLM_` prefix)
-- `embeddings: EmbeddingsSettings` (`EMBEDDING_` prefix)
-- `vector_store: VectorStoreSettings` (`VECTOR_` prefix)
-- `ingestion: IngestionSettings` (`INGEST_` prefix)
-- `prompts: PromptSettings` (`PROMPT_` prefix)
-- top-level: `log_level`, `openai_api_key`, `openai_api_key_personal`, `mistral_api_key`, `ya_api_key`, `ya_folder_id`
-
-Notable defaults:
-
-- `llm.provider = "openai"`
-- `llm.model = "base"`
-- `llm.temperature = 0.0`
-- `embeddings.provider = "openai"`
-- `embeddings.model_name = None` (factory default for OpenAI becomes `"text-embedding-3-small"`)
-- `vector_store.provider = "chroma"`
-- `vector_store.collection_name = "rag_lib_collection"`
-- `vector_store.path = "./chroma_db"`
-- `ingestion.chunk_size = 100`
-- `ingestion.semantic_threshold = 0.6`
-- `ingestion.default_pdf_backend = "poppler"`
-
-### 11.1 Factory Providers and Backends
-
-#### `create_vector_store` (`rag_lib.vectors.factory`)
-
-```python
-create_vector_store(
-    provider: str = "chroma",
-    embeddings: Optional[Embeddings] = None,
-    collection_name: str = "rag_collection",
-    connection_uri: Optional[str] = None,
-    cleanup: bool = True,
-) -> VectorStore
-```
-
-Provider/backends implemented:
-
-- `chroma`:
-  - uses `langchain_chroma.Chroma`
-  - persistent directory: `Settings().vector_store.path` (fallback `./chroma_db`)
-  - sets collection cosine space and strict relevance mapping
-  - optional collection cleanup (`delete_collection`) before returning store
-- `faiss`:
-  - uses `langchain_community.vectorstores.FAISS`
-  - initializes via `FAISS.from_texts([""], embeddings)` (current bootstrap behavior)
-- `qdrant`:
-  - uses `langchain_qdrant.Qdrant`
-  - `connection_uri=None` -> in-memory (`location=":memory:"`)
-  - with URI -> `Qdrant.from_existing_collection(..., url=connection_uri)`
-- `postgres`:
-  - uses `langchain_postgres.PGVector`
-  - requires `connection_uri`
-
-Unknown provider raises `ValueError("Unknown Vector Store provider: ...")`.
-
-#### `create_embeddings_model` (`rag_lib.embeddings.factory`)
-
-```python
-create_embeddings_model(
-    provider: Optional[str] = None,
-    model_name: Optional[str] = None,
-) -> Embeddings
-```
-
-Provider values:
-
-- `openai`
-- `local` (alias of HuggingFace local model)
-- `huggingface`
-
-`rag_lib.embeddings.mock` also provides:
-
-- `MockEmbeddings(dimension: int = 4)` for deterministic/offline tests.
-
-#### `create_llm` (`rag_lib.llm.factory`)
-
-```python
-create_llm(
-    model_name: Optional[str] = None,
-    provider: Optional[str] = None,
-    temperature: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    *,
-    streaming: bool = True,
-    callbacks: Optional[Sequence[BaseCallbackHandler]] = None,
-) -> BaseChatModel
-```
-
-Provider values:
-
-- `openai`
-- `openai_think`
-- `openai_4`
-- `openai_pers`
-- `mistral`
-- `yandex`
-
-## 12. Corrected Usage Examples
-
-### 12.1 MinerU PDF to chunks
-
-```python
-from rag_lib.loaders.miner_u import MinerULoader
-from rag_lib.chunkers.recursive import RecursiveCharacterTextSplitter
-
-loader = MinerULoader(
-    "complex_layout.pdf",
-    parse_mode="txt",
-    start_page=0,
-    end_page=4,
-    parse_formula=False,
-    parse_table=False,
-    timeout_seconds=1200,
-)
-docs = loader.load()  # List[Document]
-
-splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=120)
-segments = splitter.split_documents(docs)  # List[Segment]
-```
-
-### 12.2 Graph retrieval (strict lexical keywords, no LLM keyword extraction)
-
-```python
-from rag_lib.graph.store import NetworkXGraphStore
-from rag_lib.retrieval.graph_retriever import GraphRetriever, GraphQueryConfig
-
-graph_store = NetworkXGraphStore()
-# Populate graph_store + vector_store first.
-
-retriever = GraphRetriever(
-    vector_store=vector_store,
-    graph_store=graph_store,
-    config=GraphQueryConfig(
-        mode="hybrid",
-        enable_keyword_extraction=False,
-        top_k_entities=8,
-        top_k_relations=10,
-        top_k_chunks=8,
-    ),
-)
-
-docs = retriever.invoke("probability theory")
-```
-
-### 12.3 Scored dual storage retriever with explicit hydration mode
-
-```python
-from rag_lib.retrieval.composition import create_scored_dual_storage_retriever
-from rag_lib.retrieval.scored_retriever import SearchType, HydrationMode
-
-retriever = create_scored_dual_storage_retriever(
-    vector_store=vector_store,
-    doc_store=doc_store,
-    id_key="segment_id",
-    search_type=SearchType.similarity_score_threshold,
-    hydration_mode=HydrationMode.parents_replace,
-    score_threshold=0.4,
-)
-
-docs = retriever.invoke("query")
-```
-
-## 13. Migration Notes
-
-- `rag_lib.loaders.structured` is removed and raises `ImportError`.
-- Use `from rag_lib.loaders.docx import DocXLoader`.
-- `RegexHierarchyLoader` is now a raw text loader; hierarchical splitting belongs to `RegexHierarchySplitter` / `MarkdownHierarchySplitter`.
-- `HTMLLoader` and `HTMLSplitter` are strict (no fallback behavior for malformed input).
-- `rag_lib.__version__` is not defined in package code; use `importlib.metadata.version("rag-lib")`.
-
-## 14. Source-Validated Coverage Addendum
-
-This section lists additional implemented APIs to ensure full source coverage.
-
-### 14.1 Core Storage and Index Build APIs
-
-#### `IndexBuilder` (`rag_lib.core.index_builder`)
-
-```python
-IndexBuilder(vector_store: VectorStore, doc_store: BaseStore[str, Segment])
-```
-
-- `build(segments: List[Segment], batch_size: int = 100) -> None`
-- `abuild(segments: List[Segment], batch_size: int = 100) -> None`
-
-#### Stores (`rag_lib.core.store`)
-
-```python
-JsonFileStore(file_path: str)
-LocalPickleStore(file_path: str)
-```
-
-Both implement:
-
-- `mget(keys: Sequence[str])`
-- `mset(key_value_pairs: Sequence[Tuple[str, Segment]])`
-- `mdelete(keys: Sequence[str])`
-- `yield_keys(prefix: Optional[str] = None)`
-
-#### Logger helper (`rag_lib.core.logger`)
-
-- `setup_logger(name: str = "rag_lib") -> logging.Logger`
-
-### 14.2 Additional Chunking Utilities
-
-#### Language detection (`rag_lib.chunkers.language`)
-
-- `detect_nltk_language(text: str, default: str = "english") -> str`
-- `resolve_nltk_language(language: Optional[str], text: str, default: str = "english") -> str`
-
-#### Table-row utilities (`rag_lib.chunkers.table_rows`)
-
-Data classes:
-
-- `ParsedTable`
-- `TableRowChunk`
-
-Functions:
-
-- `detect_csv_delimiter(text: str, fallback: str = ",") -> str`
-- `parse_csv_table(...) -> tuple[ParsedTable, str]`
-- `render_csv_table(...) -> str`
-- `parse_markdown_table(...) -> ParsedTable`
-- `render_markdown_table(...) -> str`
-- `chunk_table_rows(...) -> List[TableRowChunk]`
-- `build_summary_content(...) -> str`
-
-### 14.3 HTML Processing Utilities (`rag_lib.html_processing`)
-
-Data class:
-
-- `HTMLBlock`
-
-Public functions:
-
-- `parse_html_document(content)`
-- `strip_non_content_nodes(document)`
-- `serialize_html_document(document)`
-- `extract_structural_blocks(document)`
-- `render_blocks_as_markdown(blocks)`
-- `render_blocks_as_html(blocks)`
-- `parse_html_table_element(table_element, use_first_row_as_header=True)`
-- `render_html_table(header, rows)`
-
-### 14.4 Data + Web Utility APIs
-
-#### Data helpers (`rag_lib.loaders.data_loaders`)
-
-- `select_schema_target(data, schema=".", schema_dialect=SchemaDialect.DOT_PATH) -> Tuple[bool, Any]`
-- `iter_json_leaf_paths(value, path=()) -> Iterator[Tuple[Tuple[str, ...], Any]]`
-- `render_json_as_markdown(value) -> str`
-
-#### HTML loader helper (`rag_lib.loaders.html`)
-
-- `render_html_content(content, output_format="markdown") -> str`
-
-#### Web common helpers (`rag_lib.loaders.web_common`)
-
-- `normalize_url`
-- `normalize_content_type`
-- `get_header`
-- `is_http_url`
-- `url_extension`
-- `is_html_content_type`
-- `is_html_response`
-- `parse_web_html_document`
-- `resolve_absolute_links`
-- `normalize_web_link_input`
-- `merge_web_links`
-- `partition_web_links`
-- `cleanup_and_extract_web_links`
-- `normalize_html_for_processing`
-- `render_web_html_document`
-- `render_web_html_content`
-- `is_url_in_scope`
-- `resolve_download_filename`
-- `infer_download_kind`
-- `is_download_response`
-- `route_download_content_to_documents`
-
-#### Playwright extraction utilities (`rag_lib.loaders.web_playwright_extractors`)
-
-Additional dataclasses:
-
-- `PlaywrightNavigationState`
-- `PlaywrightNavigationRunResult`
-
-Additional helpers:
-
-- `compose_sync_playwright_link_extractors(extractors)`
-- `compose_async_playwright_link_extractors(extractors)`
-- `run_sync_playwright_extraction(config, page, base_url)`
-- `run_async_playwright_extraction(config, page, base_url)` (async)
-- `run_sync_cleanup_navigation(...)`
-- `run_async_cleanup_navigation(...)` (async)
-
-### 14.5 Additional Retrieval and Graph APIs
-
-#### Reranker implementations (`rag_lib.retrieval.cross_encoder_reranker_with_score`)
-
-- `CrossEncoderRerankerWithScores`
-- `TournamentCrossEncoderReranker`
-
-#### Additional graph retriever classes (`rag_lib.retrieval.graph_retriever`)
-
-- `GraphRetrieverError` (base exception)
-- `GraphConfigurationError`
-- `GraphCapabilityError`
-- `GraphDataError`
-- `KeywordTiers` (dataclass with `high_level_keywords`, `low_level_keywords`)
-
-#### Graph store model (`rag_lib.graph.store`)
-
-- `GraphExpansionResult` (`nodes`, `edges`, `hop_by_node`)
-- `create_graph_store(provider=None, uri=None, auth=None, username=None, password=None, database=None)`
-- `Neo4jGraphStore` (re-export; direct module remains `rag_lib.graph.neo4j_store`)
-
-#### Neo4j graph store (`rag_lib.graph.neo4j_store`)
-
-- `Neo4jGraphStore(uri: str, auth: tuple[str, str], database: str = "neo4j")`
-- `close()`
-- Sync API: `add_node`, `add_edge`, `get_node`, `get_neighbors`, `search_nodes`
-- Async API: `aadd_node`, `aadd_edge`, `aget_node`, `aget_neighbors`, `asearch_nodes`
-
-#### Graph community API (`rag_lib.graph.community`)
-
-- `CommunityDetector.detect(store: NetworkXGraphStore) -> Dict[int, List[str]]`
-
-#### Base graph store capability surface (`rag_lib.graph.store.BaseGraphStore`)
-
-Sync methods:
-
-- `add_node`, `add_edge`, `get_node`, `get_neighbors`, `search_nodes`
-- `search_nodes_hybrid`, `search_edges_hybrid`
-- `expand_subgraph`
-- `get_community_summaries`
-- `get_source_segment_ids_for_entities`, `get_source_segment_ids_for_edges`
-- `get_node_prior`, `get_edge_prior`
-
-Async counterparts:
-
-- `aadd_node`, `aadd_edge`, `aget_node`, `aget_neighbors`, `asearch_nodes`
-- `asearch_nodes_hybrid`, `asearch_edges_hybrid`
-- `aexpand_subgraph`
-- `aget_community_summaries`
-- `aget_source_segment_ids_for_entities`, `aget_source_segment_ids_for_edges`
-- `aget_node_prior`, `aget_edge_prior`
-
-`NetworkXGraphStore` adds persistence helpers:
-
-- `save_to_file(path: str)`
-- `load_from_file(path: str)`
-
-### 14.6 Table Summarization APIs (`rag_lib.summarizers`)
-
-`rag_lib.summarizers.table`:
-
-- `TableSummarizer` (Protocol)
-- `MockTableSummarizer`
-- `LLMTableSummarizer` (legacy skeleton implementation)
-
-`rag_lib.summarizers.table_llm`:
-
-- `LLMTableSummarizer(llm, prompt_template=None, soft_max_chars=None)`
-- `summarize(markdown_table) -> str`
-- `asummarize(markdown_table) -> str`
-
-### 14.7 Package Export Surfaces
-
-`rag_lib.chunkers` lazy exports:
-
-- `CSVTableSplitter`
-- `HTMLSplitter`
-
-`rag_lib.processors` exports:
-
-- `SegmentEnricher`
-- `EntityExtractor`
-- `CommunitySummarizer`
-- `RaptorProcessor` (lazy export via `__getattr__`)
-
-`rag_lib.loaders` exports:
-
-- `HTMLLoader`
-- `WebLoader`
-- `AsyncWebLoader`
-- `WebCleanupConfig`
-- `WebLink`
-- `PlaywrightExtractionConfig`
-- `PlaywrightNavigationConfig`
-- `PlaywrightProfileConfig`
-- `build_sync_playwright_extractor`
-- `build_async_playwright_extractor`
-- `get_playwright_profile_defaults`
-
-## 15. External API Boundary Recommendations
-
-This section defines a recommended exposure boundary when implementing a public-facing API layer (for example `rag-api`) on top of `rag_lib`.
-
-### 15.1 Exposure levels
-
-- **Public HTTP API**: stable, JSON-serializable contracts only.
-- **Public SDK API**: Python-facing API where typed objects/classes/factories are acceptable.
-- **Internal-only**: implementation detail; do not document as external contract.
-
-### 15.2 Boundary matrix (`rag_lib` -> external API)
-
-| rag_lib module | Feature / surface | Public HTTP API | Public SDK API | Internal-only | Recommended API action |
-| --- | --- | --- | --- | --- | --- |
-| `core.domain` | `Segment`, `SegmentType` | Yes | Yes | No | Use strict schema validation; remove coercions. |
-| `core.indexer` | `Indexer` | No (direct class API) | Yes | No | Use as primary indexing path. |
-| `core.index_builder` | `IndexBuilder` | No | No | Yes | Keep internal; avoid external contract exposure. |
-| `core.store` | `JsonFileStore`, `LocalPickleStore` | No | Optional (advanced/debug SDK only) | Yes | No HTTP exposure required. |
-| `loaders.csv_excel` | `CSVLoader`, `ExcelLoader` | Yes | Yes | No | Keep supported. |
-| `loaders.data_loaders` | `JsonLoader`, `SchemaDialect`, `TableLoader`, `TextLoader` | Yes | Yes | No | Keep loaders + strict `SchemaDialect` enums. |
-| `loaders.data_loaders` | `select_schema_target`, `iter_json_leaf_paths`, `render_json_as_markdown` | No | Optional (advanced SDK) | Yes | Keep helpers internal by default. |
-| `loaders.docx` | `DocXLoader` | Yes | Yes | No | Keep supported. |
-| `loaders.html` | `HTMLLoader` | Yes | Yes | No | Keep supported. |
-| `loaders.html` | `render_html_content` | No | Optional | Yes | Treat as helper, not HTTP contract. |
-| `loaders.miner_u` | `MinerULoader` | Yes | Yes | No | Keep strict behavior; do not add silent PDF fallbacks in API layer. |
-| `loaders.pdf` | `PDFLoader` | Yes | Yes | No | Keep supported. |
-| `loaders.pymupdf` | `PyMuPDFLoader` | Yes | Yes | No | Keep supported. |
-| `loaders.regex` | `RegexHierarchyLoader` | Yes | Yes | No | Keep supported. |
-| `loaders.web` | `WebLoader` | Yes | Yes | No | Keep high-level parity; expose only serializable options in HTTP. |
-| `loaders.web_async` | `AsyncWebLoader` | Yes | Yes | No | Same as sync web loader. |
-| `loaders.web`/`loaders.web_async` | callback params (`login_processor`, `custom_link_extractors`, `playwright_link_extractor`) | No | Optional (advanced SDK) | Yes | Keep callback injection out of HTTP contract. |
-| `loaders.web_common` | `WebCleanupConfig`, `WebLink` | Yes | Yes | No | Expose as stable config/data models. |
-| `loaders.web_common` | helper functions (`cleanup_and_extract_web_links`, `normalize_url`, etc.) | No | Optional | Yes | Keep helper surface internal by default. |
-| `loaders.web_playwright_extractors` | `PlaywrightExtractionConfig`, `PlaywrightNavigationConfig`, `PlaywrightProfileConfig`, `get_playwright_profile_defaults` | Yes | Yes | No | Expose as stable Playwright config layer. |
-| `loaders.web_playwright_extractors` | `build_sync_playwright_extractor`, `build_async_playwright_extractor` | No | Yes | No | SDK-only convenience builders; avoid HTTP exposure. |
-| `loaders.web_playwright_extractors` | low-level runners/composers (`compose_*`, `run_*`) | No | Optional (advanced SDK) | Yes | Treat as internal orchestration APIs. |
-| `chunkers.recursive` | `RecursiveCharacterTextSplitter` | Yes | Yes | No | Keep; represent options as serializable config in HTTP. |
-| `chunkers.token` | `TokenTextSplitter` | Yes | Yes | No | Keep; represent options as serializable config in HTTP. |
-| `chunkers.sentence` | `SentenceSplitter` | Yes | Yes | No | Keep; represent options as serializable config in HTTP. |
-| `chunkers.regex` | `RegexSplitter` | Yes | Yes | No | Keep; represent options as serializable config in HTTP. |
-| `chunkers.regex_hierarchy` | `RegexHierarchySplitter` | Yes | Yes | No | Keep supported. |
-| `chunkers.markdown_hierarchy` | `MarkdownHierarchySplitter` | Yes | Yes | No | Keep supported. |
-| `chunkers.json` | `JsonSplitter` | Yes | Yes | No | Keep; include `min_chunk_size` in API schema. |
-| `chunkers.qa` | `QASplitter` | Yes | Yes | No | Keep supported. |
-| `chunkers.markdown_table` | `MarkdownTableSplitter` | Yes | Yes | No | Keep; expose full table summarization option set. |
-| `chunkers.csv_table` | `CSVTableSplitter` | Yes | Yes | No | Keep; expose full summarization option set. |
-| `chunkers.html` | `HTMLSplitter` | Yes | Yes | No | Keep; expose full summarization option set. |
-| `chunkers.semantic` | `SemanticChunker` | Yes | Yes | No | Keep strict behavior and thresholds as-is. |
-| `chunkers.*` | callable hooks like `length_function` | No | Optional (advanced SDK) | Yes | Do not expose callables in HTTP API; use predefined modes. |
-| `chunkers.table_rows` | `ParsedTable`, `TableRowChunk`, helper functions | No | Optional | Yes | Keep internal by default. |
-| `chunkers.language` | `detect_nltk_language`, `resolve_nltk_language` | No | Optional | Yes | Keep internal helper layer. |
-| `retrieval.retrievers` | `create_vector_retriever`, `create_bm25_retriever`, `create_graph_retriever` | No | Yes | No | Prefer factory-driven retriever composition. |
-| `retrieval.retrievers` | `RegexRetriever`, `FuzzyRetriever` classes | No | Yes | No | SDK-only classes; map to strategy enums in HTTP if needed. |
-| `retrieval.composition` | `create_ensemble_retriever`, `create_dual_storage_retriever`, `create_scored_dual_storage_retriever`, `create_reranking_retriever`, `create_graph_hybrid_retriever` | No | Yes | No | Use composition factories directly; avoid custom merge branches. |
-| `retrieval.scored_retriever` | `SearchType`, `HydrationMode` | Yes | Yes | No | Keep enum parity across API layer. |
-| `retrieval.scored_retriever` | `ScoredMultiVectorRetriever` | No | Yes | No | Keep as SDK-level concrete retriever implementation. |
-| `retrieval.graph_retriever` | `GraphRetriever`, `GraphQueryConfig`, `KeywordTiers`, errors | No | Yes | No | Use strict graph path and explicit error mapping. |
-| `graph.store` | `BaseGraphStore`, `GraphExpansionResult`, `NetworkXGraphStore`, `Neo4jGraphStore`, `create_graph_store` | No (direct class API) | Yes | No | Keep explicit backend selection via factory; avoid hidden fallback substitution. |
-| `graph.neo4j_store` | `Neo4jGraphStore` | No (direct class API) | Yes | No | Keep as compatibility/direct backend module import. |
-| `graph.community` | `CommunityDetector` | No | Yes | No | Keep supported. |
-| `processors.enricher` | `SegmentEnricher` | No | Yes | No | Keep supported. |
-| `processors.entity_extractor` | `EntityExtractor` | No | Yes | No | Keep supported. |
-| `processors.community_summarizer` | `CommunitySummarizer` | No | Yes | No | Keep supported. |
-| `processors.raptor` | `RaptorProcessor` | No | Yes | No | Expose advanced options already supported by library. |
-| `raptor.*` | `ClusteringService`, `ClusterSummarizer`, `TreeBuilder` | No | Yes | No | Keep as SDK-level advanced configuration surface. |
-| `summarizers.table` | `TableSummarizer`, `MockTableSummarizer`, `LLMTableSummarizer` | No | Yes | No | Keep and expose supported options in SDK. |
-| `summarizers.table_llm` | `LLMTableSummarizer(prompt_template, soft_max_chars)` | No | Yes | No | Expose missing options explicitly in SDK. |
-| `vectors.factory` | `create_vector_store` | No (direct function) | Yes | No | Use provider-driven config; avoid direct object plumbing in HTTP. |
-| `embeddings.factory` | `create_embeddings_model` | No (direct function) | Yes | No | Keep supported. |
-| `llm.factory` | `create_llm` | No (direct function) | Yes | No | Expose supported args in SDK; keep callback objects out of HTTP. |
-
-### 15.3 Implementation rules for external HTTP APIs
-
-- Keep HTTP contracts JSON-only: no Python callables, model instances, or runtime callbacks.
-- Expose enums as strict strings matching `rag_lib` values (`SearchType`, `HydrationMode`, `SchemaDialect`, `FetchMode`, `CrawlScope`, Playwright profile names).
-- Prefer explicit failure over silent fallback in backend selection, retrieval mode, and graph mode.
-- Treat helper/utility functions as internal unless there is a clear product need and stability commitment.
-- Prefer high-level, declarative config objects over low-level orchestration endpoints.
+Per-example output includes:
+
+- project create request/response
+- pipeline create request/response
+- run submit request/response
+- final job response
+- artifact list/detail payloads
+- retriever create/init/query/release payloads
+- retrieval result detail payloads
+- `summary.json`
+- `error.json` when failed
+
+Global output includes:
+
+- `run.summary.json`
+- `run.errors.json`
+
+## 10. Practical Authoring Guidance
+
+When authoring production manifests:
+
+1. Start with `POST /api/v1/projects/{pid}/pipelines/validate`.
+2. Check `validation_warnings`; do not ignore unknown component warnings.
+3. Use `GET /api/v1/capabilities` to confirm component names and parameter signatures.
+4. Prefer explicit `input_aliases` even though implicit chaining is supported.
+5. For Chroma, never put physical storage keys in `indexing.params`.
+6. For dual storage, ensure segments have stable `segment_id` and `parent_id` semantics.
+
+When authoring example manifests:
+
+1. Remember that `pipeline_create_payload` is the production manifest.
+2. Keep `input_spec.file` inside `example_docs`.
+3. Put effective retrieval fanout in `create.params`, not `queries[].top_k`.
+4. Use `expected_outcome: error` only for intentional rejection scenarios.
+5. Use separate `run_name` values for sync/async or alternative pipeline variants.
+
+## 11. Current Gotchas and Non-Obvious Rules
+
+- `GET /api/v1/capabilities/examples` is not implemented; only `GET /api/v1/capabilities` exists.
+- Unknown component names may create successfully with warnings, then fail during execution.
+- `inputs[].artifact_kind = index` is schema-valid but not executable today.
+- Web loaders are always forced to headless mode by the API adapter.
+- Query-time `top_k` is intentionally not part of the public query contract.
+- `example_profile_id` is rejected by the production run API.
+- Dual-storage index restoration depends on artifact lineage being present.
+- `EntityExtractor` can create persisted `graph_entity` artifacts even when the processor itself returns `kind = "none"`.
+
+## 12. File Map
+
+Core files for pipeline developers:
+
+- `app/main.py`
+- `app/api/routes.py`
+- `app/schemas/pipelines.py`
+- `app/schemas/projects.py`
+- `app/schemas/retrievers.py`
+- `app/schemas/jobs.py`
+- `app/services/pipeline_validator.py`
+- `app/services/pipeline_advisory_validator.py`
+- `app/services/runtime_objects.py`
+- `app/services/jobs.py`
+- `app/services/rag_adapter.py`
+- `app/services/artifacts.py`
+- `app/models/entities.py`
+- `scripts/run_pipeline_examples.py`
+- `scripts/lib/pipeline_example_manifest.py`
+- `scripts/lib/pipeline_example_runner.py`
+- `scripts/generate_pipeline_example_manifest.py`
+- `examples/pipeline_examples/manifest.v1.yaml`
